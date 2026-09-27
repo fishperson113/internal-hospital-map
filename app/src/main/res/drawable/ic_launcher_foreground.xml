@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Map fold silhouette -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.25"
+        android:pathData="M28,34 L45,39 L63,34 L80,39 L80,74 L63,69 L45,74 L28,69 Z" />
+    <!-- Pin shadow base -->
+    <path
+        android:fillColor="#0D47A1"
+        android:fillAlpha="0.4"
+        android:pathData="M44,74 A10,4 0 1,0 64,74 A10,4 0 1,0 44,74" />
+    <!-- Main Location Pin Body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,26 C43.5,26 35,34.5 35,45 C35,58 54,76 54,76 C54,76 73,58 73,45 C73,34.5 64.5,26 54,26 Z" />
+    <!-- Navigation Arrow / Inner icon -->
+    <path
+        android:fillColor="#1A73E8"
+        android:pathData="M54,34 L62,52 L54,48 L46,52 Z" />
+</vector>

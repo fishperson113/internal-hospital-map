@@ -3,6 +3,15 @@ package com.example.di
 import com.example.data.remote.MapApiService
 import com.example.data.repository.MapRepository
 import com.example.data.repository.MapRepositoryImpl
+import com.example.hospital.data.datasource.HospitalMapDataSource
+import com.example.hospital.data.datasource.MockHospitalMapDataSource
+import com.example.hospital.data.repository.HospitalMapRepository
+import com.example.hospital.data.repository.HospitalMapRepositoryImpl
+import com.example.hospital.domain.pathfinding.DijkstraPathfindingStrategy
+import com.example.hospital.domain.pathfinding.PathfindingStrategy
+import com.example.hospital.domain.usecase.FindHospitalRouteUseCase
+import com.example.hospital.domain.usecase.GetHospitalMapUseCase
+import com.example.hospital.domain.usecase.SearchRoomsUseCase
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.OkHttpClient
@@ -50,5 +59,33 @@ class DefaultAppContainer : AppContainer {
 
     override val mapRepository: MapRepository by lazy {
         MapRepositoryImpl(apiService = mapApiService)
+    }
+
+    // Hospital Indoor Navigation Architecture Singletons
+    private val hospitalMapDataSource: HospitalMapDataSource by lazy {
+        MockHospitalMapDataSource()
+    }
+
+    override val hospitalMapRepository: HospitalMapRepository by lazy {
+        HospitalMapRepositoryImpl(dataSource = hospitalMapDataSource)
+    }
+
+    override val pathfindingStrategy: PathfindingStrategy by lazy {
+        DijkstraPathfindingStrategy()
+    }
+
+    override val getHospitalMapUseCase: GetHospitalMapUseCase by lazy {
+        GetHospitalMapUseCase(repository = hospitalMapRepository)
+    }
+
+    override val searchRoomsUseCase: SearchRoomsUseCase by lazy {
+        SearchRoomsUseCase(repository = hospitalMapRepository)
+    }
+
+    override val findHospitalRouteUseCase: FindHospitalRouteUseCase by lazy {
+        FindHospitalRouteUseCase(
+            repository = hospitalMapRepository,
+            pathfindingStrategy = pathfindingStrategy
+        )
     }
 }
