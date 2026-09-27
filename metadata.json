@@ -1,0 +1,6 @@
+{
+  "name": "MapFlow",
+  "description": "Mobile Map application with MVVM architecture, Dependency Injection, and Kotlin Flow ready for custom API integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

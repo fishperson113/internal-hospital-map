@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">MapFlow</string>
+    <string name="search_hint">Tìm kiếm địa điểm, địa chỉ...</string>
+    <string name="filter_all">Tất cả</string>
+    <string name="filter_food">Quán ăn</string>
+    <string name="filter_coffee">Cà phê</string>
+    <string name="filter_gas">Cây xăng</string>
+    <string name="filter_hotel">Khách sạn</string>
+    <string name="filter_tourist">Điểm tham quan</string>
+    <string name="directions">Chỉ đường</string>
+    <string name="save">Lưu</string>
+    <string name="saved">Đã lưu</string>
+    <string name="share">Chia sẻ</string>
+    <string name="call">Gọi</string>
+    <string name="my_location">Vị trí của tôi</string>
+    <string name="map_layers">Lớp bản đồ</string>
+    <string name="standard_layer">Mặc định</string>
+    <string name="satellite_layer">Vệ tinh</string>
+    <string name="traffic_layer">Giao thông</string>
+    <string name="api_settings">Cấu hình API</string>
+    <string name="start_navigation">Bắt đầu điều hướng</string>
+    <string name="stop_navigation">Dừng điều hướng</string>
+</resources>
