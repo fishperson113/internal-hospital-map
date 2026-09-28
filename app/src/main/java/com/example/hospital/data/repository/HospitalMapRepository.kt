@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 
 interface HospitalMapRepository {
     fun getHospitalMap(): Flow<HospitalMapData>
+    suspend fun getAllRooms(): List<Room>
     suspend fun getRoomById(roomId: String): Room?
     suspend fun searchRooms(query: String): List<Room>
     suspend fun getGraph(): Graph

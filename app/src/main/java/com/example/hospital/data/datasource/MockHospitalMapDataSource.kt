@@ -34,7 +34,7 @@ class MockHospitalMapDataSource : HospitalMapDataSource {
             category = RoomCategory.RECEPTION,
             description = "Đăng ký khám, tiếp đón bệnh nhân ban đầu",
             nodeId = "node_reception",
-            boundsLeft = 0.41f, boundsTop = 0.65f, boundsWidth = 0.08f, boundsHeight = 0.08f
+            boundsLeft = 0.49f, boundsTop = 0.64f, boundsWidth = 0.065f, boundsHeight = 0.08f
         ),
         Room(
             id = "room_main_entrance",
@@ -86,7 +86,7 @@ class MockHospitalMapDataSource : HospitalMapDataSource {
             category = RoomCategory.FACILITY,
             description = "Lưu trữ thiết bị y tế cấp cứu",
             nodeId = "node_equipment",
-            boundsLeft = 0.27f, boundsTop = 0.34f, boundsWidth = 0.06f, boundsHeight = 0.07f
+            boundsLeft = 0.20f, boundsTop = 0.34f, boundsWidth = 0.05f, boundsHeight = 0.06f
         ),
 
         // Pharmacy & Warehouse (Center)
@@ -385,28 +385,30 @@ class MockHospitalMapDataSource : HospitalMapDataSource {
      * and doors connect perpendicular to the corridor without crossing any room boxes.
      */
     private val graphNodes = mapOf(
-        // Central Corridor Nodes
-        "node_hall_center" to MapNode("node_hall_center", 1, 0.45f, 0.42f, "Giao lộ trung tâm"),
+        // Central Corridor Nodes (Strict X = 0.45f)
+        "node_hall_center" to MapNode("node_hall_center", 1, 0.45f, 0.43f, "Giao lộ trung tâm"),
         "node_you_are_here" to MapNode("node_you_are_here", 1, 0.45f, 0.58f, "Bạn ở đây", roomId = "room_you_are_here"),
         "node_reception_door" to MapNode("node_reception_door", 1, 0.45f, 0.68f, "Cửa đăng ký"),
-        "node_reception" to MapNode("node_reception", 1, 0.45f, 0.69f, "Quầy đăng ký", roomId = "room_reception"),
+        "node_reception" to MapNode("node_reception", 1, 0.52f, 0.68f, "Quầy đăng ký", roomId = "room_reception"),
         "node_main_entrance" to MapNode("node_main_entrance", 1, 0.45f, 0.82f, "Tiền sảnh", roomId = "room_main_entrance"),
 
-        // East-West Main Corridor (Y = 0.42f)
-        "node_hall_emergency_junction" to MapNode("node_hall_emergency_junction", 1, 0.20f, 0.42f, "Ngã rẽ cấp cứu"),
-        "node_hall_cashier" to MapNode("node_hall_cashier", 1, 0.35f, 0.42f, "Hành lang thu ngân"),
-        "node_hall_pharmacy" to MapNode("node_hall_pharmacy", 1, 0.54f, 0.42f, "Hành lang nhà thuốc"),
-        "node_hall_stairs" to MapNode("node_hall_stairs", 1, 0.70f, 0.42f, "Hành lang thang bộ"),
-        "node_hall_ct" to MapNode("node_hall_ct", 1, 0.78f, 0.42f, "Hành lang CT"),
+        // East-West Main Corridor (Y = 0.43f)
+        "node_hall_emergency_junction" to MapNode("node_hall_emergency_junction", 1, 0.20f, 0.43f, "Ngã rẽ cấp cứu"),
+        "node_hall_cashier" to MapNode("node_hall_cashier", 1, 0.34f, 0.43f, "Hành lang thu ngân"),
+        "node_hall_pharmacy" to MapNode("node_hall_pharmacy", 1, 0.54f, 0.43f, "Hành lang nhà thuốc"),
+        "node_hall_stairs" to MapNode("node_hall_stairs", 1, 0.70f, 0.43f, "Hành lang thang bộ"),
+        "node_hall_ct" to MapNode("node_hall_ct", 1, 0.78f, 0.43f, "Hành lang CT"),
 
-        // Emergency Corridor (X = 0.20f)
-        "node_hall_emergency_mid" to MapNode("node_hall_emergency_mid", 1, 0.20f, 0.32f, "Hành lang trước cấp cứu"),
-        "node_door_emergency_b" to MapNode("node_door_emergency_b", 1, 0.24f, 0.28f, "Cửa Cấp cứu B"),
-        "node_emergency_b" to MapNode("node_emergency_b", 1, 0.28f, 0.28f, "Cấp cứu B", roomId = "room_emergency_b"),
+        // Secondary / Ambulance Emergency Corridor (X = 0.20f)
+        "node_hall_emergency_mid" to MapNode("node_hall_emergency_mid", 1, 0.20f, 0.28f, "Hành lang trước cấp cứu"),
+        "node_door_emergency_b_rear" to MapNode("node_door_emergency_b_rear", 1, 0.24f, 0.28f, "Cửa Cấp cứu B"),
+        "node_emergency_b" to MapNode("node_emergency_b", 1, 0.31f, 0.28f, "Cấp cứu B", roomId = "room_emergency_b"),
+        "node_door_emergency_b_front" to MapNode("node_door_emergency_b_front", 1, 0.31f, 0.36f, "Cửa trước Cấp cứu B"),
+        "node_hall_emergency_front" to MapNode("node_hall_emergency_front", 1, 0.31f, 0.43f, "Hành lang Cấp cứu B"),
         "node_door_ae_dept" to MapNode("node_door_ae_dept", 1, 0.19f, 0.32f, "Cửa Sảnh cấp cứu"),
         "node_ae_dept" to MapNode("node_ae_dept", 1, 0.15f, 0.32f, "Sảnh cấp cứu", roomId = "room_ae_dept"),
         "node_isolation" to MapNode("node_isolation", 1, 0.21f, 0.27f, "Cách ly", roomId = "room_isolation"),
-        "node_equipment" to MapNode("node_equipment", 1, 0.27f, 0.38f, "Kho thiết bị", roomId = "room_equipment"),
+        "node_equipment" to MapNode("node_equipment", 1, 0.22f, 0.36f, "Kho thiết bị", roomId = "room_equipment"),
 
         // Left Clinics Corridor (X = 0.20f, down to clinics)
         "node_hall_clinics_left" to MapNode("node_hall_clinics_left", 1, 0.20f, 0.58f, "Hành lang khám bệnh"),
@@ -418,7 +420,7 @@ class MockHospitalMapDataSource : HospitalMapDataSource {
         "node_dept_office" to MapNode("node_dept_office", 1, 0.27f, 0.74f, "VP Khoa", roomId = "room_dept_office"),
 
         // Cashier & Admin Corridor
-        "node_cashier" to MapNode("node_cashier", 1, 0.35f, 0.46f, "Quầy thu ngân", roomId = "room_cashier"),
+        "node_cashier" to MapNode("node_cashier", 1, 0.34f, 0.46f, "Quầy thu ngân", roomId = "room_cashier"),
         "node_insurance" to MapNode("node_insurance", 1, 0.35f, 0.52f, "Dịch vụ BH", roomId = "room_insurance"),
         "node_customer_care" to MapNode("node_customer_care", 1, 0.28f, 0.52f, "CSKH", roomId = "room_customer_care"),
 
@@ -428,7 +430,7 @@ class MockHospitalMapDataSource : HospitalMapDataSource {
         "node_pharmacy_storage" to MapNode("node_pharmacy_storage", 1, 0.62f, 0.46f, "Kho dược", roomId = "room_pharmacy_storage"),
 
         // Diagnostic Corridor (X = 0.64f, Y = 0.31f)
-        "node_hall_diag_branch" to MapNode("node_hall_diag_branch", 1, 0.64f, 0.42f, "Lối vào CĐHA"),
+        "node_hall_diag_branch" to MapNode("node_hall_diag_branch", 1, 0.64f, 0.43f, "Lối vào CĐHA"),
         "node_hall_diag_mid" to MapNode("node_hall_diag_mid", 1, 0.64f, 0.31f, "Hành lang CĐHA"),
         "node_ultrasound_1" to MapNode("node_ultrasound_1", 1, 0.51f, 0.29f, "Siêu âm 1", roomId = "room_ultrasound_1"),
         "node_ultrasound_2" to MapNode("node_ultrasound_2", 1, 0.56f, 0.29f, "Siêu âm 2", roomId = "room_ultrasound_2"),
@@ -465,34 +467,39 @@ class MockHospitalMapDataSource : HospitalMapDataSource {
 
     /**
      * Strict Hallway Edges:
-     * Walkers move along hallway spines and enter rooms through doorways.
+     * Walkers move strictly along hallway centerlines and enter rooms through direct doorways.
      */
     private val graphEdges = listOf(
-        // Central corridor spine
-        MapEdge("node_main_entrance", "node_reception_door", 10f),
-        MapEdge("node_reception_door", "node_reception", 2f),
-        MapEdge("node_reception_door", "node_you_are_here", 8f),
-        MapEdge("node_you_are_here", "node_hall_center", 12f),
+        // Central corridor spine (Pure straight line X = 0.45f)
+        MapEdge("node_main_entrance", "node_reception_door", 8f),
+        MapEdge("node_reception_door", "node_reception", 4f),
+        MapEdge("node_reception_door", "node_you_are_here", 6f),
+        MapEdge("node_you_are_here", "node_hall_center", 10f),
 
-        // East-West Spine
-        MapEdge("node_hall_emergency_junction", "node_hall_cashier", 12f),
-        MapEdge("node_hall_cashier", "node_hall_center", 8f),
+        // East-West Spine (Y = 0.43f)
+        MapEdge("node_hall_emergency_junction", "node_hall_emergency_front", 6f),
+        MapEdge("node_hall_emergency_front", "node_hall_cashier", 4f),
+        MapEdge("node_hall_cashier", "node_hall_center", 6f),
         MapEdge("node_hall_center", "node_hall_pharmacy", 7f),
         MapEdge("node_hall_pharmacy", "node_hall_diag_branch", 8f),
         MapEdge("node_hall_diag_branch", "node_hall_stairs", 6f),
         MapEdge("node_hall_stairs", "node_hall_ct", 6f),
 
-        // Emergency branch
+        // Direct front entrance from main hallway into Emergency B:
+        MapEdge("node_hall_emergency_front", "node_door_emergency_b_front", 4f),
+        MapEdge("node_door_emergency_b_front", "node_emergency_b", 3f),
+
+        // Emergency branch (X = 0.20f)
         MapEdge("node_hall_emergency_junction", "node_hall_emergency_mid", 8f),
-        MapEdge("node_hall_emergency_mid", "node_door_emergency_b", 4f),
-        MapEdge("node_door_emergency_b", "node_emergency_b", 3f),
+        MapEdge("node_hall_emergency_mid", "node_door_emergency_b_rear", 4f),
+        MapEdge("node_door_emergency_b_rear", "node_emergency_b", 3f),
         MapEdge("node_hall_emergency_mid", "node_door_ae_dept", 4f),
         MapEdge("node_door_ae_dept", "node_ae_dept", 3f),
-        MapEdge("node_door_emergency_b", "node_isolation", 3f),
+        MapEdge("node_door_emergency_b_rear", "node_isolation", 3f),
         MapEdge("node_hall_emergency_mid", "node_equipment", 6f),
 
         // Left clinic branch
-        MapEdge("node_hall_emergency_junction", "node_hall_clinics_left", 12f),
+        MapEdge("node_hall_emergency_junction", "node_hall_clinics_left", 10f),
         MapEdge("node_hall_clinics_left", "node_door_101", 6f),
         MapEdge("node_door_101", "node_101", 3f),
         MapEdge("node_door_101", "node_door_102", 5f),

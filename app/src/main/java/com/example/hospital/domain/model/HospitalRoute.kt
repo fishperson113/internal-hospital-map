@@ -12,6 +12,8 @@ data class RouteStep(
     val floorLevel: Int,
     val targetFloorLevel: Int = floorLevel,
     val instruction: String,
+    val startRoomId: String? = null,
+    val destRoomId: String? = null,
     val distanceMeters: Float = 0f,
     val estimatedDurationSeconds: Int = 0,
     val isCrossFloorStep: Boolean = false,

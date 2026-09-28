@@ -91,8 +91,9 @@ fun RouteSelectorCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    val startDesc = startRoom?.let { HospitalLocalization.getRoomDescription(it.id, it.description, language) } ?: ""
                     Text(
-                        text = "${HospitalLocalization.getFloorLabel(startRoom?.floorLevel ?: 1, language)}",
+                        text = "${HospitalLocalization.getFloorLabel(startRoom?.floorLevel ?: 1, language)} • $startDesc",
                         fontSize = 10.sp,
                         color = Color(0xFF64748B),
                         maxLines = 1,
@@ -159,8 +160,9 @@ fun RouteSelectorCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    val destDesc = destRoom?.let { HospitalLocalization.getRoomDescription(it.id, it.description, language) } ?: ""
                     Text(
-                        text = "${HospitalLocalization.getFloorLabel(destRoom?.floorLevel ?: 1, language)}",
+                        text = "${HospitalLocalization.getFloorLabel(destRoom?.floorLevel ?: 1, language)} • $destDesc",
                         fontSize = 10.sp,
                         color = Color(0xFF64748B),
                         maxLines = 1,

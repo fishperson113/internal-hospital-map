@@ -74,6 +74,7 @@ fun HospitalMapScreen(
                 FloorSelectorRow(
                     floors = uiState.floors,
                     selectedFloorLevel = uiState.selectedFloorLevel,
+                    language = uiState.language,
                     onSelectFloor = { level -> viewModel.onSelectFloor(level) }
                 )
             }
@@ -96,6 +97,7 @@ fun HospitalMapScreen(
                     isSelectingStart = uiState.isSelectingStartRoom,
                     query = uiState.searchQuery,
                     rooms = uiState.searchResults,
+                    language = uiState.language,
                     onQueryChange = { q -> viewModel.onSearchQueryChanged(q) },
                     onSelectRoom = { room ->
                         if (uiState.isSelectingStartRoom) {

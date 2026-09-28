@@ -17,11 +17,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hospital.domain.model.Floor
+import com.example.hospital.presentation.util.AppLanguage
+import com.example.hospital.presentation.util.HospitalLocalization
 
 @Composable
 fun FloorSelectorRow(
     floors: List<Floor>,
     selectedFloorLevel: Int?, // null for "Tất cả"
+    language: AppLanguage = AppLanguage.VIETNAMESE,
     onSelectFloor: (Int?) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -33,10 +36,10 @@ fun FloorSelectorRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // "Tất cả" chip (Multi-floor stacked view)
+        // "Tất cả / All" chip (Multi-floor stacked view)
         val isAllSelected = selectedFloorLevel == null
         FloorChip(
-            label = "Tất cả",
+            label = HospitalLocalization.getAllFloorsLabel(language),
             isSelected = isAllSelected,
             onClick = { onSelectFloor(null) },
             testTag = "floor_chip_all"
@@ -46,7 +49,7 @@ fun FloorSelectorRow(
         floors.forEach { floor ->
             val isSelected = selectedFloorLevel == floor.level
             FloorChip(
-                label = floor.name,
+                label = HospitalLocalization.getFloorLabel(floor.level, language),
                 isSelected = isSelected,
                 onClick = { onSelectFloor(floor.level) },
                 testTag = "floor_chip_${floor.level}"

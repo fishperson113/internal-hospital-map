@@ -212,8 +212,32 @@ private fun StepItemView(step: RouteStep, language: AppLanguage) {
                 color = Color(0xFF1E293B)
             )
 
+            val displayInstruction = when {
+                step.stepNumber == 1 -> {
+                    val startName = step.startRoomId?.let { HospitalLocalization.getRoomDisplayName(it, step.instruction, language) }
+                        ?: step.instruction
+                    HospitalLocalization.getStepWalkFromInstruction(startName, step.floorLevel, language)
+                }
+                step.iconType == StepIconType.DESTINATION -> {
+                    val destName = step.destRoomId?.let { HospitalLocalization.getRoomDisplayName(it, step.instruction, language) }
+                        ?: step.instruction
+                    HospitalLocalization.getStepDestinationInstruction(destName, step.targetFloorLevel, language)
+                }
+                step.iconType == StepIconType.ELEVATOR -> {
+                    val isUp = step.targetFloorLevel > step.floorLevel
+                    HospitalLocalization.getStepElevatorInstruction(isUp, step.targetFloorLevel, language)
+                }
+                step.iconType == StepIconType.STAIRS -> {
+                    val isUp = step.targetFloorLevel > step.floorLevel
+                    HospitalLocalization.getStepStairsInstruction(isUp, step.targetFloorLevel, language)
+                }
+                else -> {
+                    HospitalLocalization.getStepWalkStraightInstruction(language)
+                }
+            }
+
             Text(
-                text = step.instruction,
+                text = displayInstruction,
                 fontSize = 10.sp,
                 color = Color(0xFF475569),
                 lineHeight = 14.sp

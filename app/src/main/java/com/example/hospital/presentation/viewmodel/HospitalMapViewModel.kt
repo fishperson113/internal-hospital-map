@@ -159,6 +159,11 @@ class HospitalMapViewModel(
             }
             it.copy(language = newLang)
         }
+        val currentStart = _uiState.value.startRoom
+        val currentDest = _uiState.value.destRoom
+        if (currentStart != null && currentDest != null) {
+            calculateRoute(currentStart.id, currentDest.id)
+        }
     }
 
     fun onPan(dx: Float, dy: Float) {
@@ -172,7 +177,7 @@ class HospitalMapViewModel(
 
     private fun calculateRoute(startRoomId: String, destRoomId: String) {
         viewModelScope.launch {
-            val route = findHospitalRouteUseCase(startRoomId, destRoomId)
+            val route = findHospitalRouteUseCase(startRoomId, destRoomId, _uiState.value.language)
             _uiState.update { it.copy(currentRoute = route) }
         }
     }

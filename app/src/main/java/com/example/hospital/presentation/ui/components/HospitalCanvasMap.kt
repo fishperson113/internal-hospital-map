@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -265,7 +266,7 @@ private fun FloorTodoPlaceholder(
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0077D7)),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Icon(imageVector = Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = if (language == AppLanguage.VIETNAMESE) "Xem Sơ đồ Tầng 1" else "Back to Floor 1",
@@ -426,7 +427,14 @@ private fun DrawScope.drawCorridorBeds(
     drawRect(
         color = corridorColor,
         topLeft = Offset(left + side * 0.42f, top + side * 0.42f),
-        size = Size(side * 0.06f, side * 0.36f)
+        size = Size(side * 0.06f, side * 0.40f)
+    )
+
+    // Emergency B front entrance hallway connector (X = 0.28f to 0.34f)
+    drawRect(
+        color = corridorColor,
+        topLeft = Offset(left + side * 0.28f, top + side * 0.33f),
+        size = Size(side * 0.06f, side * 0.08f)
     )
 
     // Emergency North-South Hallway (X = 0.18f to 0.23f)

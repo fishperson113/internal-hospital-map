@@ -19,6 +19,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hospital.domain.model.Room
+import com.example.hospital.presentation.util.AppLanguage
+import com.example.hospital.presentation.util.HospitalLocalization
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -26,6 +28,7 @@ fun RoomSearchDialog(
     isSelectingStart: Boolean,
     query: String,
     rooms: List<Room>,
+    language: AppLanguage = AppLanguage.VIETNAMESE,
     onQueryChange: (String) -> Unit,
     onSelectRoom: (Room) -> Unit,
     onDismiss: () -> Unit
@@ -47,14 +50,17 @@ fun RoomSearchDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (isSelectingStart) "Chọn điểm xuất phát (Từ)" else "Chọn điểm đến (Đến)",
+                    text = HospitalLocalization.getSearchDialogTitle(isSelectingStart, language),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF1E293B)
                 )
                 Spacer(modifier = Modifier.weight(1f))
                 IconButton(onClick = onDismiss) {
-                    Icon(imageVector = Icons.Default.Close, contentDescription = "Đóng")
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = HospitalLocalization.getCloseButtonLabel(language)
+                    )
                 }
             }
 
@@ -67,14 +73,17 @@ fun RoomSearchDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("search_room_input"),
-                placeholder = { Text("Tìm theo tên phòng, mã phòng, khoa...") },
+                placeholder = { Text(HospitalLocalization.getSearchHint(language)) },
                 leadingIcon = {
                     Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = Color(0xFF0077D7))
                 },
                 trailingIcon = {
                     if (query.isNotEmpty()) {
                         IconButton(onClick = { onQueryChange("") }) {
-                            Icon(imageVector = Icons.Default.Close, contentDescription = "Xóa tìm kiếm")
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = HospitalLocalization.getClearSearchLabel(language)
+                            )
                         }
                     }
                 },
@@ -94,6 +103,7 @@ fun RoomSearchDialog(
                 items(rooms, key = { it.id }) { room ->
                     RoomListItem(
                         room = room,
+                        language = language,
                         onClick = { onSelectRoom(room) }
                     )
                 }
@@ -105,6 +115,7 @@ fun RoomSearchDialog(
 @Composable
 private fun RoomListItem(
     room: Room,
+    language: AppLanguage,
     onClick: () -> Unit
 ) {
     Surface(
@@ -139,7 +150,7 @@ private fun RoomListItem(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = room.name,
+                        text = HospitalLocalization.getRoomDisplayName(room.id, room.name, language),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF1E293B)
@@ -150,7 +161,7 @@ private fun RoomListItem(
                         color = Color(0xFF0077D7).copy(alpha = 0.1f)
                     ) {
                         Text(
-                            text = "Tầng ${room.floorLevel}",
+                            text = HospitalLocalization.getFloorLabel(room.floorLevel, language),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF0077D7),
@@ -159,7 +170,7 @@ private fun RoomListItem(
                     }
                 }
                 Text(
-                    text = room.description,
+                    text = HospitalLocalization.getRoomDescription(room.id, room.description, language),
                     fontSize = 12.sp,
                     color = Color(0xFF64748B)
                 )

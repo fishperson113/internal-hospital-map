@@ -15,6 +15,10 @@ class HospitalMapRepositoryImpl(
         return dataSource.getHospitalMapData()
     }
 
+    override suspend fun getAllRooms(): List<Room> {
+        return dataSource.getHospitalMapData().first().floors.flatMap { it.rooms }
+    }
+
     override suspend fun getRoomById(roomId: String): Room? {
         val mapData = dataSource.getHospitalMapData().first()
         for (floor in mapData.floors) {
@@ -30,9 +34,17 @@ class HospitalMapRepositoryImpl(
         val lowerQuery = query.trim().lowercase()
         val allRooms = mapData.floors.flatMap { it.rooms }
         return allRooms.filter { room ->
+            val nameVi = com.example.hospital.presentation.util.HospitalLocalization.getRoomDisplayName(room.id, room.name, com.example.hospital.presentation.util.AppLanguage.VIETNAMESE).lowercase()
+            val nameEn = com.example.hospital.presentation.util.HospitalLocalization.getRoomDisplayName(room.id, room.name, com.example.hospital.presentation.util.AppLanguage.ENGLISH).lowercase()
+            val descVi = com.example.hospital.presentation.util.HospitalLocalization.getRoomDescription(room.id, room.description, com.example.hospital.presentation.util.AppLanguage.VIETNAMESE).lowercase()
+            val descEn = com.example.hospital.presentation.util.HospitalLocalization.getRoomDescription(room.id, room.description, com.example.hospital.presentation.util.AppLanguage.ENGLISH).lowercase()
+
             room.name.lowercase().contains(lowerQuery) ||
+                    nameVi.contains(lowerQuery) ||
+                    nameEn.contains(lowerQuery) ||
+                    descVi.contains(lowerQuery) ||
+                    descEn.contains(lowerQuery) ||
                     room.code.lowercase().contains(lowerQuery) ||
-                    room.description.lowercase().contains(lowerQuery) ||
                     room.category.displayName.lowercase().contains(lowerQuery)
         }
     }

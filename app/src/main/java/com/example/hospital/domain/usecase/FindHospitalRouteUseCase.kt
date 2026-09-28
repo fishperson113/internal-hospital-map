@@ -6,6 +6,8 @@ import com.example.hospital.domain.model.MapNode
 import com.example.hospital.domain.model.RouteStep
 import com.example.hospital.domain.model.StepIconType
 import com.example.hospital.domain.pathfinding.PathfindingStrategy
+import com.example.hospital.presentation.util.AppLanguage
+import com.example.hospital.presentation.util.HospitalLocalization
 import kotlin.math.roundToInt
 
 class FindHospitalRouteUseCase(
@@ -13,7 +15,11 @@ class FindHospitalRouteUseCase(
     private val pathfindingStrategy: PathfindingStrategy
 ) {
 
-    suspend operator fun invoke(startRoomOrNodeId: String, destRoomOrNodeId: String): HospitalRoute? {
+    suspend operator fun invoke(
+        startRoomOrNodeId: String,
+        destRoomOrNodeId: String,
+        language: AppLanguage = AppLanguage.VIETNAMESE
+    ): HospitalRoute? {
         val graph = repository.getGraph()
         val startRoom = repository.getRoomById(startRoomOrNodeId)
         val destRoom = repository.getRoomById(destRoomOrNodeId)
@@ -27,6 +33,14 @@ class FindHospitalRouteUseCase(
         val pathNodes = pathfindingStrategy.findPath(graph, startNodeId, destNodeId) ?: return null
         if (pathNodes.isEmpty()) return null
 
+        val allRooms = repository.getAllRooms()
+        val simplifiedNodes = com.example.hospital.domain.pathfinding.PathSimplifier.simplify(
+            pathNodes = pathNodes,
+            rooms = allRooms,
+            startRoomId = startRoom?.id,
+            destRoomId = destRoom?.id
+        )
+
         var totalDistance = 0f
         val edgeMap = graph.edges.associateBy { "${it.fromNodeId}_${it.toNodeId}" }
         val reverseEdgeMap = graph.edges.associateBy { "${it.toNodeId}_${it.fromNodeId}" }
@@ -39,7 +53,19 @@ class FindHospitalRouteUseCase(
         }
 
         val isCrossFloor = startNode.floorLevel != destNode.floorLevel
-        val steps = buildSteps(pathNodes, startRoom?.name ?: startNode.label, destRoom?.name ?: destNode.label)
+        val startDisplayName = startRoom?.let { HospitalLocalization.getRoomDisplayName(it.id, it.name, language) }
+            ?: HospitalLocalization.getRoomDisplayName(startNode.id, startNode.label, language)
+        val destDisplayName = destRoom?.let { HospitalLocalization.getRoomDisplayName(it.id, it.name, language) }
+            ?: HospitalLocalization.getRoomDisplayName(destNode.id, destNode.label, language)
+
+        val steps = buildSteps(
+            simplifiedNodes,
+            startDisplayName,
+            destDisplayName,
+            startRoom?.id ?: startNode.roomId ?: startNode.id,
+            destRoom?.id ?: destNode.roomId ?: destNode.id,
+            language
+        )
 
         val durationMinutes = ((totalDistance / 1.0f + (if (isCrossFloor) 40f else 0f)) / 60f).roundToInt().coerceAtLeast(1)
 
@@ -50,15 +76,18 @@ class FindHospitalRouteUseCase(
             totalDistanceMeters = totalDistance,
             estimatedDurationMinutes = durationMinutes,
             steps = steps,
-            pathNodeIds = pathNodes.map { it.id },
-            pathNodes = pathNodes
+            pathNodeIds = simplifiedNodes.map { it.id },
+            pathNodes = simplifiedNodes
         )
     }
 
     private fun buildSteps(
         pathNodes: List<MapNode>,
         startName: String,
-        destName: String
+        destName: String,
+        startRoomId: String?,
+        destRoomId: String?,
+        language: AppLanguage
     ): List<RouteStep> {
         val steps = mutableListOf<RouteStep>()
         var stepIndex = 1
@@ -75,7 +104,9 @@ class FindHospitalRouteUseCase(
                 stepNumber = stepIndex++,
                 floorLevel = firstFloor,
                 targetFloorLevel = firstFloor,
-                instruction = "Đi từ $startName (Tầng $firstFloor)",
+                instruction = HospitalLocalization.getStepWalkFromInstruction(startName, firstFloor, language),
+                startRoomId = startRoomId,
+                destRoomId = destRoomId,
                 distanceMeters = 30f,
                 estimatedDurationSeconds = 25,
                 isCrossFloorStep = false,
@@ -91,15 +122,21 @@ class FindHospitalRouteUseCase(
             if (curr.floorLevel != next.floorLevel) {
                 val isElevator = curr.isElevator || next.isElevator
                 val iconType = if (isElevator) StepIconType.ELEVATOR else StepIconType.STAIRS
-                val vehicleName = if (isElevator) "thang máy" else "thang bộ"
-                val direction = if (next.floorLevel > curr.floorLevel) "lên" else "xuống"
+                val isUp = next.floorLevel > curr.floorLevel
+                val instruction = if (isElevator) {
+                    HospitalLocalization.getStepElevatorInstruction(isUp, next.floorLevel, language)
+                } else {
+                    HospitalLocalization.getStepStairsInstruction(isUp, next.floorLevel, language)
+                }
 
                 steps.add(
                     RouteStep(
                         stepNumber = stepIndex++,
                         floorLevel = curr.floorLevel,
                         targetFloorLevel = next.floorLevel,
-                        instruction = "Đi $vehicleName $direction Tầng ${next.floorLevel}",
+                        instruction = instruction,
+                        startRoomId = startRoomId,
+                        destRoomId = destRoomId,
                         distanceMeters = 0f,
                         estimatedDurationSeconds = if (isElevator) 15 else 35,
                         isCrossFloorStep = true,
@@ -116,7 +153,9 @@ class FindHospitalRouteUseCase(
                 stepNumber = stepIndex++,
                 floorLevel = finalFloor,
                 targetFloorLevel = finalFloor,
-                instruction = "Đi đến $destName (Tầng $finalFloor)",
+                instruction = HospitalLocalization.getStepDestinationInstruction(destName, finalFloor, language),
+                startRoomId = startRoomId,
+                destRoomId = destRoomId,
                 distanceMeters = 20f,
                 estimatedDurationSeconds = 18,
                 isCrossFloorStep = false,
