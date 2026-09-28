@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
-                MapScreen(viewModel = mapViewModel)
+                com.example.hospital.presentation.ui.HospitalMapScreen(viewModel = hospitalMapViewModel)
             }
         }
     }
