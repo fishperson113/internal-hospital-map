@@ -8,10 +8,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -19,6 +20,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -30,10 +32,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hospital.domain.model.Floor
 import com.example.hospital.domain.model.HospitalRoute
+import com.example.hospital.domain.model.Point2D
 import com.example.hospital.domain.model.Room
 import com.example.hospital.presentation.util.AppLanguage
 import com.example.hospital.presentation.util.HospitalLocalization
-import kotlin.math.min
+import kotlin.math.*
 
 @Composable
 fun HospitalCanvasMap(
@@ -51,21 +54,22 @@ fun HospitalCanvasMap(
     onZoomOut: () -> Unit,
     onResetView: () -> Unit,
     onRoomClick: (Room) -> Unit,
-    onSelectFloor1: () -> Unit,
+    onSelectFloor: (Int?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val textMeasurer = rememberTextMeasurer()
-    val floor1 = floors.find { it.level == 1 } ?: floors.firstOrNull()
 
-    // When user selects Floor 2, 3, 4, 5: show clean TODO placeholder
-    // When user selects "Tất cả" (null) or "Tầng 1" (1): both show the Floor 1 map as requested!
-    val isOtherFloor = selectedFloorLevel != null && selectedFloorLevel != 1
+    // Single Floor selection
+    val currentFloor = if (selectedFloorLevel != null) {
+        floors.find { it.level == selectedFloorLevel }
+    } else null
 
-    if (isOtherFloor) {
+    // If Floor 1 is selected, show TODO placeholder
+    if (currentFloor != null && currentFloor.isTodo) {
         FloorTodoPlaceholder(
-            floorLevel = selectedFloorLevel ?: 2,
+            floorLevel = currentFloor.level,
             language = language,
-            onBackToFloor1 = onSelectFloor1,
+            onSelectFloor = onSelectFloor,
             modifier = modifier
         )
         return
@@ -81,43 +85,88 @@ fun HospitalCanvasMap(
                     onPan(dragAmount.x, dragAmount.y)
                 }
             }
-            .pointerInput(floor1, zoomLevel, panOffsetX, panOffsetY) {
+            .pointerInput(selectedFloorLevel, floors, zoomLevel, panOffsetX, panOffsetY) {
                 detectTapGestures { tapOffset ->
-                    if (floor1 != null) {
-                        val squareSize = min(size.width, size.height) * 0.94f * zoomLevel
-                        val left = (size.width - squareSize) / 2f + panOffsetX
-                        val top = (size.height - squareSize) / 2f + panOffsetY
+                    if (selectedFloorLevel != null && currentFloor != null && !currentFloor.isTodo) {
+                        // 2D Single Floor Hit-Test
+                        val fw = currentFloor.width.coerceAtLeast(100f)
+                        val fh = currentFloor.height.coerceAtLeast(100f)
+                        val scale = min((size.width - 32f) / fw, (size.height - 180f) / fh) * zoomLevel
+                        val originX = (size.width - fw * scale) / 2f + panOffsetX
+                        val originY = (size.height - fh * scale) / 2f + 30f + panOffsetY
 
-                        val relativeX = (tapOffset.x - left) / squareSize
-                        val relativeY = (tapOffset.y - top) / squareSize
+                        val fx = (tapOffset.x - originX) / scale
+                        val fy = (tapOffset.y - originY) / scale
 
-                        val clickedRoom = floor1.rooms.find { room ->
-                            relativeX >= room.boundsLeft &&
-                                    relativeX <= (room.boundsLeft + room.boundsWidth) &&
-                                    relativeY >= room.boundsTop &&
-                                    relativeY <= (room.boundsTop + room.boundsHeight)
+                        val clicked = currentFloor.rooms.find { room ->
+                            if (room.polygon.isNotEmpty()) {
+                                pointInPolygon(fx, fy, room.polygon)
+                            } else {
+                                fx in room.boundsLeft..(room.boundsLeft + room.boundsWidth) &&
+                                        fy in room.boundsTop..(room.boundsTop + room.boundsHeight)
+                            }
                         }
-                        if (clickedRoom != null) {
-                            onRoomClick(clickedRoom)
+                        if (clicked != null) {
+                            onRoomClick(clicked)
+                        }
+                    } else if (selectedFloorLevel == null) {
+                        // 3D Isometric Multi-Floor Hit-Test
+                        val activeFloors = floors.filter { !it.isTodo }
+                        // Test upper floor first (Floor 3), then lower (Floor 2)
+                        val sortedForHit = activeFloors.sortedByDescending { it.level }
+                        val baseScale = computeIsoScale(size.width.toFloat(), size.height.toFloat(), zoomLevel)
+                        val elevation = 240f * zoomLevel
+
+                        for (fl in sortedForHit) {
+                            for (room in fl.rooms) {
+                                if (room.polygon.isEmpty()) continue
+                                val isoPoly = room.polygon.map { pt ->
+                                    projectIso(
+                                        pt.x, pt.y, fl.level,
+                                        size.width.toFloat(), size.height.toFloat(),
+                                        baseScale, elevation, panOffsetX, panOffsetY
+                                    )
+                                }
+                                if (pointInPolygonOffset(tapOffset.x, tapOffset.y, isoPoly)) {
+                                    onRoomClick(room)
+                                    return@detectTapGestures
+                                }
+                            }
                         }
                     }
                 }
             }
             .testTag("hospital_map_canvas")
     ) {
+        val canvasWidth = constraints.maxWidth.toFloat()
+        val canvasHeight = constraints.maxHeight.toFloat()
+
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val width = size.width
-            val height = size.height
+            // 1. Subtle Background Blueprint Grid
+            drawBlueprintGrid(canvasWidth, canvasHeight)
 
-            // 1. Subtle background grid
-            drawBlueprintGrid(width, height)
-
-            // 2. Responsive 1:1 Square Map Layout
-            if (floor1 != null) {
-                drawHoanMySquareFloor1Map(
-                    canvasWidth = width,
-                    canvasHeight = height,
-                    floor = floor1,
+            if (selectedFloorLevel == null) {
+                // 2. ISOMETRIC 3D MULTI-FLOOR VIEW (Tất cả)
+                drawIsometricBuildingMap(
+                    canvasWidth = canvasWidth,
+                    canvasHeight = canvasHeight,
+                    floors = floors.filter { !it.isTodo },
+                    currentRoute = currentRoute,
+                    startRoom = startRoom,
+                    destRoom = destRoom,
+                    language = language,
+                    zoom = zoomLevel,
+                    panX = panOffsetX,
+                    panY = panOffsetY,
+                    textMeasurer = textMeasurer,
+                    onSelectFloor = onSelectFloor
+                )
+            } else if (currentFloor != null && !currentFloor.isTodo) {
+                // 3. 2D POLYGON SINGLE FLOOR VIEW (Tầng 2 / Tầng 3)
+                drawPolygonFloorMap(
+                    canvasWidth = canvasWidth,
+                    canvasHeight = canvasHeight,
+                    floor = currentFloor,
                     currentRoute = currentRoute,
                     startRoom = startRoom,
                     destRoom = destRoom,
@@ -157,6 +206,39 @@ fun HospitalCanvasMap(
             )
         }
 
+        // View Mode Badge at top right
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 180.dp, end = 14.dp)
+                .shadow(2.dp, RoundedCornerShape(12.dp)),
+            shape = RoundedCornerShape(12.dp),
+            color = Color.White.copy(alpha = 0.94f)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = if (selectedFloorLevel == null) Icons.Default.Layers else Icons.Default.Map,
+                    contentDescription = null,
+                    tint = Color(0xFF0077D7),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (selectedFloorLevel == null) {
+                        if (language == AppLanguage.VIETNAMESE) "3D Isometric" else "3D Isometric"
+                    } else {
+                        HospitalLocalization.getFloorLabel(selectedFloorLevel, language)
+                    },
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF0F172A)
+                )
+            }
+        }
+
         // Gesture Drag Hint Badge at bottom right
         Surface(
             modifier = Modifier
@@ -188,11 +270,15 @@ fun HospitalCanvasMap(
     }
 }
 
+// -----------------------------------------------------------------------------
+// 1. FLOOR 1 TODO PLACEHOLDER
+// -----------------------------------------------------------------------------
+
 @Composable
 private fun FloorTodoPlaceholder(
     floorLevel: Int,
     language: AppLanguage,
-    onBackToFloor1: () -> Unit,
+    onSelectFloor: (Int?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -205,7 +291,7 @@ private fun FloorTodoPlaceholder(
         Card(
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
         ) {
             Column(
@@ -215,116 +301,106 @@ private fun FloorTodoPlaceholder(
                 Surface(
                     shape = CircleShape,
                     color = Color(0xFFFFF3E0),
-                    modifier = Modifier.size(56.dp)
+                    modifier = Modifier.size(64.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Default.Construction,
                             contentDescription = null,
                             tint = Color(0xFFF57C00),
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(32.dp)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
                     text = HospitalLocalization.getFloorLabel(floorLevel, language).uppercase(),
-                    fontSize = 18.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF1E293B)
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
                     text = if (language == AppLanguage.VIETNAMESE) "TODO: Đang hoàn thiện sơ đồ tầng này" else "TODO: Floor map under construction",
-                    fontSize = 13.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFFF57C00),
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Text(
                     text = if (language == AppLanguage.VIETNAMESE)
-                        "Hiện tại ứng dụng tập trung hiển thị chi tiết sơ đồ Tầng 1 Bệnh viện Hoàn Mỹ."
+                        "Sơ đồ Tầng 1 đã chuyển về trạng thái TODO theo yêu cầu. Hiện tại hệ thống hỗ trợ đầy đủ sơ đồ đa giác Tầng 2, Tầng 3 và chế độ xem 3D Isometric."
                     else
-                        "Currently, the app focuses on displaying Floor 1 of Hoan My Hospital.",
-                    fontSize = 12.sp,
+                        "Floor 1 is currently in TODO status. The app supports full polygon maps for Floor 2, Floor 3, and 3D Isometric view.",
+                    fontSize = 13.sp,
                     color = Color(0xFF64748B),
                     textAlign = TextAlign.Center,
-                    lineHeight = 16.sp
+                    lineHeight = 18.sp
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                Button(
-                    onClick = onBackToFloor1,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0077D7)),
-                    shape = RoundedCornerShape(12.dp)
+                // Action buttons to go to Floor 2, Floor 3, or 3D view
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (language == AppLanguage.VIETNAMESE) "Xem Sơ đồ Tầng 1" else "Back to Floor 1",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Button(
+                        onClick = { onSelectFloor(2) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0077D7)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = if (language == AppLanguage.VIETNAMESE) "Xem Tầng 2" else "Floor 2",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Button(
+                        onClick = { onSelectFloor(3) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = if (language == AppLanguage.VIETNAMESE) "Xem Tầng 3" else "Floor 3",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = { onSelectFloor(null) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "3D Iso",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0077D7)
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-@Composable
-private fun MapControlButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit,
-    testTag: String
-) {
-    Surface(
-        onClick = onClick,
-        modifier = Modifier
-            .size(36.dp)
-            .shadow(2.dp, CircleShape)
-            .testTag(testTag),
-        shape = CircleShape,
-        color = Color.White
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = Color(0xFF0077D7),
-                modifier = Modifier.size(18.dp)
-            )
-        }
-    }
-}
+// -----------------------------------------------------------------------------
+// 2. 2D POLYGON SINGLE FLOOR RENDERING (Tầng 2 & Tầng 3)
+// -----------------------------------------------------------------------------
 
-private fun DrawScope.drawBlueprintGrid(width: Float, height: Float) {
-    val gridColor = Color(0xFFE2E8F0)
-    val step = 32f
-    var x = 0f
-    while (x < width) {
-        drawLine(gridColor, Offset(x, 0f), Offset(x, height), strokeWidth = 1f)
-        x += step
-    }
-    var y = 0f
-    while (y < height) {
-        drawLine(gridColor, Offset(0f, y), Offset(width, y), strokeWidth = 1f)
-        y += step
-    }
-}
-
-/**
- * Renders the 1:1 Responsive Square Floor 1 Map
- */
-private fun DrawScope.drawHoanMySquareFloor1Map(
+private fun DrawScope.drawPolygonFloorMap(
     canvasWidth: Float,
     canvasHeight: Float,
     floor: Floor,
@@ -337,387 +413,626 @@ private fun DrawScope.drawHoanMySquareFloor1Map(
     panY: Float,
     textMeasurer: TextMeasurer
 ) {
-    // Responsive 1:1 Square sizing
-    val squareSide = min(canvasWidth, canvasHeight) * 0.92f * zoom
-    val left = (canvasWidth - squareSide) / 2f + panX
-    val top = (canvasHeight - squareSide) / 2f + panY
+    val fw = floor.width.coerceAtLeast(100f)
+    val fh = floor.height.coerceAtLeast(100f)
+    val scale = min((canvasWidth - 32f) / fw, (canvasHeight - 180f) / fh) * zoom
+    val originX = (canvasWidth - fw * scale) / 2f + panX
+    val originY = (canvasHeight - fh * scale) / 2f + 30f + panY
 
-    val corner = CornerRadius(14f, 14f)
+    fun toCanvas(px: Float, py: Float): Offset {
+        return Offset(originX + px * scale, originY + py * scale)
+    }
 
-    // 1. Board Background Shadow & Surface
+    // 1. Floor Base Slab / Architectural Card
     drawRoundRect(
-        color = Color(0xFFCBD5E1).copy(alpha = 0.6f),
-        topLeft = Offset(left, top + 6f),
-        size = Size(squareSide, squareSide),
-        cornerRadius = corner
+        color = Color(0x18000000),
+        topLeft = Offset(originX + 4f, originY + 8f),
+        size = Size(fw * scale, fh * scale),
+        cornerRadius = CornerRadius(16f, 16f)
     )
     drawRoundRect(
-        color = Color.White,
-        topLeft = Offset(left, top),
-        size = Size(squareSide, squareSide),
-        cornerRadius = corner
+        color = Color(0xFFFCFDFE),
+        topLeft = Offset(originX, originY),
+        size = Size(fw * scale, fh * scale),
+        cornerRadius = CornerRadius(16f, 16f)
     )
     drawRoundRect(
-        color = Color(0xFF94A3B8),
-        topLeft = Offset(left, top),
-        size = Size(squareSide, squareSide),
-        cornerRadius = corner,
-        style = Stroke(2.5f)
+        color = Color(0xFFCBD5E1),
+        topLeft = Offset(originX, originY),
+        size = Size(fw * scale, fh * scale),
+        cornerRadius = CornerRadius(16f, 16f),
+        style = Stroke(2.0f)
     )
 
-    // 2. Header of the Board (Logo and Floor Name cleanly localized)
-    val brandName = if (language == AppLanguage.VIETNAMESE) "Hoàn Mỹ" else "Hoan My"
-    val logoText = textMeasurer.measure(
+    // 2. Building Brand and Floor Title Header
+    val brandName = if (language == AppLanguage.VIETNAMESE) "Bệnh viện Đa khoa Hoàn Mỹ" else "Hoan My General Hospital"
+    val brandText = textMeasurer.measure(
         text = AnnotatedString(brandName),
-        style = TextStyle(color = Color(0xFF00756A), fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
+        style = TextStyle(color = Color(0xFF00756A), fontSize = 12.sp, fontWeight = FontWeight.Bold)
     )
     drawCircle(
         color = Color(0xFF00756A),
-        radius = 7f,
-        center = Offset(left + 20f, top + 20f)
+        radius = 5f,
+        center = Offset(originX + 16f, originY + 16f)
     )
-    drawText(textLayoutResult = logoText, topLeft = Offset(left + 32f, top + 11f))
+    drawText(textLayoutResult = brandText, topLeft = Offset(originX + 26f, originY + 8f))
 
-    val floorLabel = if (language == AppLanguage.VIETNAMESE) "TẦNG 1" else "FLOOR 1"
-    val floorTitleText = textMeasurer.measure(
+    val floorLabel = HospitalLocalization.getFloorLabel(floor.level, language).uppercase()
+    val floorText = textMeasurer.measure(
         text = AnnotatedString(floorLabel),
-        style = TextStyle(color = Color(0xFF0F172A), fontSize = 14.sp, fontWeight = FontWeight.Black, textAlign = TextAlign.End)
+        style = TextStyle(color = Color(0xFF0F172A), fontSize = 13.sp, fontWeight = FontWeight.Black)
     )
-    drawText(textLayoutResult = floorTitleText, topLeft = Offset(left + squareSide - floorTitleText.size.width - 20f, top + 11f))
+    drawText(textLayoutResult = floorText, topLeft = Offset(originX + fw * scale - floorText.size.width - 16f, originY + 8f))
 
-    // 3. Hallways/Corridors Background (Light grey walkable zone)
-    drawCorridorBeds(left, top, squareSide)
+    // 3. Render all Polygon Rooms
+    for (room in floor.rooms) {
+        val poly = room.polygon
+        if (poly.isEmpty()) continue
 
-    // 4. Red Dashed Emergency Exit Path
-    drawEmergencyExitDashes(left, top, squareSide, textMeasurer)
-
-    // 5. Draw all Functional Rooms of Floor 1
-    drawFloor1RoomBoxes(left, top, squareSide, floor, destRoom, language, textMeasurer)
-
-    // 6. Draw Main Entrance Arrow (TIỀN SẢNH)
-    drawMainEntranceIndicator(left, top, squareSide, language, textMeasurer)
-
-    // 7. Draw "Bạn ở đây / You are here" Pin
-    drawYouAreHerePin(left, top, squareSide, language, textMeasurer)
-
-    // 8. Draw Navigation Path STRICTLY following Corridor Graph Nodes!
-    if (currentRoute != null) {
-        drawStrictCorridorNavigationPath(left, top, squareSide, currentRoute, textMeasurer)
-    }
-
-    // 9. Bottom Right Legend Box (CHÚ THÍCH | NOTE)
-    drawLegendBoxSquare(left, top, squareSide, language, textMeasurer)
-}
-
-private fun DrawScope.drawCorridorBeds(
-    left: Float,
-    top: Float,
-    side: Float
-) {
-    val corridorColor = Color(0xFFF1F5F9)
-
-    // East-West Main Hallway (Y = 0.40f to 0.46f)
-    drawRect(
-        color = corridorColor,
-        topLeft = Offset(left + side * 0.18f, top + side * 0.40f),
-        size = Size(side * 0.65f, side * 0.06f)
-    )
-
-    // North-South Central Hallway (X = 0.42f to 0.48f)
-    drawRect(
-        color = corridorColor,
-        topLeft = Offset(left + side * 0.42f, top + side * 0.42f),
-        size = Size(side * 0.06f, side * 0.40f)
-    )
-
-    // Emergency B front entrance hallway connector (X = 0.28f to 0.34f)
-    drawRect(
-        color = corridorColor,
-        topLeft = Offset(left + side * 0.28f, top + side * 0.33f),
-        size = Size(side * 0.06f, side * 0.08f)
-    )
-
-    // Emergency North-South Hallway (X = 0.18f to 0.23f)
-    drawRect(
-        color = corridorColor,
-        topLeft = Offset(left + side * 0.18f, top + side * 0.26f),
-        size = Size(side * 0.05f, side * 0.50f)
-    )
-
-    // Diagnostic corridor (Y = 0.29f to 0.33f)
-    drawRect(
-        color = corridorColor,
-        topLeft = Offset(left + side * 0.48f, top + side * 0.29f),
-        size = Size(side * 0.35f, side * 0.04f)
-    )
-}
-
-private fun DrawScope.drawEmergencyExitDashes(
-    left: Float,
-    top: Float,
-    side: Float,
-    textMeasurer: TextMeasurer
-) {
-    val exitRed = Color(0xFFDC2626)
-    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f)
-
-    val p1 = Offset(left + side * 0.45f, top + side * 0.74f)
-    val p2 = Offset(left + side * 0.45f, top + side * 0.43f)
-    val p3 = Offset(left + side * 0.20f, top + side * 0.43f)
-    val p4 = Offset(left + side * 0.20f, top + side * 0.32f)
-    val pExitLeft = Offset(left + side * 0.08f, top + side * 0.32f)
-
-    drawLine(exitRed, p1, p2, strokeWidth = 1.8f, pathEffect = dashEffect)
-    drawLine(exitRed, p2, p3, strokeWidth = 1.8f, pathEffect = dashEffect)
-    drawLine(exitRed, p3, p4, strokeWidth = 1.8f, pathEffect = dashEffect)
-    drawLine(exitRed, p4, pExitLeft, strokeWidth = 1.8f, pathEffect = dashEffect)
-
-    // Emergency exit arrow
-    val arrowPath = Path().apply {
-        moveTo(pExitLeft.x + 10f, pExitLeft.y - 6f)
-        lineTo(pExitLeft.x, pExitLeft.y)
-        lineTo(pExitLeft.x + 10f, pExitLeft.y + 6f)
-    }
-    drawPath(arrowPath, exitRed, style = Stroke(width = 2.5f, cap = StrokeCap.Round))
-}
-
-private fun DrawScope.drawFloor1RoomBoxes(
-    left: Float,
-    top: Float,
-    side: Float,
-    floor: Floor,
-    selectedDestRoom: Room?,
-    language: AppLanguage,
-    textMeasurer: TextMeasurer
-) {
-    floor.rooms.forEach { room ->
-        val rx = left + room.boundsLeft * side
-        val ry = top + room.boundsTop * side
-        val rw = room.boundsWidth * side
-        val rh = room.boundsHeight * side
-
-        val isDestSelected = selectedDestRoom?.id == room.id
-        val (bgColor, borderColor, textColor) = when (room.id) {
-            "room_emergency_b" -> Triple(Color(0xFFD32F2F), Color(0xFFB71C1C), Color.White)
-            "room_reception", "room_minor_surgery" -> Triple(Color(0xFFFFCDD2), Color(0xFFE57373), Color(0xFFB71C1C))
-            "room_pharmacy_service", "room_pharmacy_insurance", "room_pharmacy_storage" -> Triple(Color(0xFFB2DFDB), Color(0xFF4DB6AC), Color(0xFF004D40))
-            "room_elevator_1" -> Triple(Color(0xFFFFE082), Color(0xFFFFB300), Color(0xFFE65100))
-            "room_stairs_1" -> Triple(Color(0xFFFFCC80), Color(0xFFFB8C00), Color(0xFFE65100))
-            "room_cashier" -> Triple(Color(0xFF80CBC4), Color(0xFF26A69A), Color(0xFF004D40))
-            "room_dept_office" -> Triple(Color(0xFF1E3A8A), Color(0xFF1E40AF), Color.White)
-            "room_you_are_here", "room_main_entrance" -> Triple(Color.Transparent, Color.Transparent, Color.Transparent)
-            else -> Triple(Color(0xFFB2EBF2), Color(0xFF4DD0E1), Color(0xFF006064))
+        val path = Path().apply {
+            val first = toCanvas(poly[0].x, poly[0].y)
+            moveTo(first.x, first.y)
+            for (i in 1 until poly.size) {
+                val pt = toCanvas(poly[i].x, poly[i].y)
+                lineTo(pt.x, pt.y)
+            }
+            close()
         }
 
-        if (rw > 0 && rh > 0 && bgColor != Color.Transparent) {
-            drawRoundRect(
-                color = bgColor,
-                topLeft = Offset(rx, ry),
-                size = Size(rw, rh),
-                cornerRadius = CornerRadius(4f, 4f)
-            )
-
-            val strokeWidth = if (isDestSelected) 3.5f else 1.2f
-            val strokeColor = if (isDestSelected) Color(0xFFDC2626) else borderColor
-            drawRoundRect(
-                color = strokeColor,
-                topLeft = Offset(rx, ry),
-                size = Size(rw, rh),
-                cornerRadius = CornerRadius(4f, 4f),
-                style = Stroke(strokeWidth)
-            )
-
-            // Red cross emblem for Emergency B
-            if (room.id == "room_emergency_b") {
-                val circleCenter = Offset(rx + rw * 0.22f, ry + rh * 0.50f)
-                val cRadius = rh * 0.26f
-                drawCircle(Color.White, cRadius, circleCenter)
-                val crossHalf = cRadius * 0.55f
-                drawLine(Color(0xFFD32F2F), Offset(circleCenter.x - crossHalf, circleCenter.y), Offset(circleCenter.x + crossHalf, circleCenter.y), strokeWidth = 2.5f)
-                drawLine(Color(0xFFD32F2F), Offset(circleCenter.x, circleCenter.y - crossHalf), Offset(circleCenter.x, circleCenter.y + crossHalf), strokeWidth = 2.5f)
-            }
-
-            // Clean single-language text label
-            val localizedName = HospitalLocalization.getRoomDisplayName(room.id, room.name, language)
-            val fontSize = if (rw > 60f) 7.5.sp else 6.2.sp
-
-            val textResult = textMeasurer.measure(
-                text = AnnotatedString(localizedName),
-                style = TextStyle(
-                    color = textColor,
-                    fontSize = fontSize,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
-                )
-            )
-
-            val textOffsetX = if (room.id == "room_emergency_b") rx + rw * 0.38f else rx + (rw - textResult.size.width) / 2f
-            val textOffsetY = ry + (rh - textResult.size.height) / 2f
-            if (rw > 20f && rh > 12f) {
-                drawText(textLayoutResult = textResult, topLeft = Offset(textOffsetX, textOffsetY))
-            }
+        // Room Background Color
+        val roomBgColor = try {
+            Color(android.graphics.Color.parseColor(room.colorHex))
+        } catch (_: Exception) {
+            Color(0xFFCFE0E8)
         }
-    }
-}
+        drawPath(path, roomBgColor)
 
-private fun DrawScope.drawMainEntranceIndicator(
-    left: Float,
-    top: Float,
-    side: Float,
-    language: AppLanguage,
-    textMeasurer: TextMeasurer
-) {
-    val entranceX = left + side * 0.45f
-    val entranceY = top + side * 0.81f
+        // Room Border
+        val isStart = room.id == startRoom?.id
+        val isDest = room.id == destRoom?.id
 
-    val arrowColor = Color(0xFF00695C)
-    val arrowPath = Path().apply {
-        moveTo(entranceX, entranceY - 12f)
-        lineTo(entranceX - 8f, entranceY)
-        lineTo(entranceX + 8f, entranceY)
-        close()
-    }
-    drawPath(arrowPath, arrowColor)
-    drawRect(arrowColor, Offset(entranceX - 3f, entranceY), Size(6f, 12f))
+        if (isDest) {
+            // Glowing Destination Outline
+            drawPath(path, Color(0x66EF4444), style = Stroke(width = 6f * zoom.coerceIn(0.8f, 1.5f)))
+            drawPath(path, Color(0xFFEF4444), style = Stroke(width = 3.5f))
+        } else if (isStart) {
+            // Glowing Start Outline
+            drawPath(path, Color(0x6610B981), style = Stroke(width = 6f * zoom.coerceIn(0.8f, 1.5f)))
+            drawPath(path, Color(0xFF10B981), style = Stroke(width = 3.5f))
+        } else {
+            // Normal Room Border
+            drawPath(path, Color.White.copy(alpha = 0.65f), style = Stroke(width = 1.2f))
+        }
 
-    val entranceLabel = HospitalLocalization.getMainEntranceLabel(language)
-    val entranceText = textMeasurer.measure(
-        text = AnnotatedString(entranceLabel),
-        style = TextStyle(
-            color = Color(0xFF0F172A),
-            fontSize = 8.5.sp,
-            fontWeight = FontWeight.ExtraBold,
-            textAlign = TextAlign.Center
+        // Room Label & Badge
+        val labelCenter = room.labelAt ?: Point2D(
+            poly.map { it.x }.average().toFloat(),
+            poly.map { it.y }.average().toFloat()
         )
-    )
-    drawText(
-        textLayoutResult = entranceText,
-        topLeft = Offset(entranceX - entranceText.size.width / 2f, entranceY + 15f)
-    )
-}
+        val canvasLabelPos = toCanvas(labelCenter.x, labelCenter.y)
 
-private fun DrawScope.drawYouAreHerePin(
-    left: Float,
-    top: Float,
-    side: Float,
-    language: AppLanguage,
-    textMeasurer: TextMeasurer
-) {
-    val markerX = left + side * 0.45f
-    val markerY = top + side * 0.58f
+        // Stair or Elevator Icon / Badge
+        if (room.kind == "elevator") {
+            drawCircle(Color(0xFF2E7D32), radius = 8f * zoom.coerceIn(0.8f, 1.4f), center = canvasLabelPos)
+            val elevText = textMeasurer.measure(
+                text = AnnotatedString("EV"),
+                style = TextStyle(color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            )
+            drawText(elevText, topLeft = Offset(canvasLabelPos.x - elevText.size.width / 2f, canvasLabelPos.y - elevText.size.height / 2f))
+        } else if (room.kind == "stair") {
+            drawCircle(Color(0xFFE65100), radius = 8f * zoom.coerceIn(0.8f, 1.4f), center = canvasLabelPos)
+            val stairText = textMeasurer.measure(
+                text = AnnotatedString("ST"),
+                style = TextStyle(color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            )
+            drawText(stairText, topLeft = Offset(canvasLabelPos.x - stairText.size.width / 2f, canvasLabelPos.y - stairText.size.height / 2f))
+        } else {
+            // Normal Room Name
+            val displayName = if (language == AppLanguage.ENGLISH && room.nameEn.isNotEmpty()) {
+                room.nameEn
+            } else {
+                room.name
+            }
 
-    drawCircle(Color(0xFF0077D7).copy(alpha = 0.25f), 10f, Offset(markerX, markerY))
-    drawCircle(Color(0xFF0077D7), 5.5f, Offset(markerX, markerY))
-    drawCircle(Color.White, 2f, Offset(markerX, markerY))
+            if (displayName.isNotBlank() && zoom >= 0.7f) {
+                val textColor = try {
+                    Color(android.graphics.Color.parseColor(room.textColorHex))
+                } catch (_: Exception) {
+                    Color(0xFF222222)
+                }
 
-    val youText = textMeasurer.measure(
-        text = AnnotatedString(HospitalLocalization.getYouAreHereLabel(language)),
-        style = TextStyle(color = Color(0xFF0077D7), fontSize = 8.sp, fontWeight = FontWeight.Bold)
-    )
-    drawText(textLayoutResult = youText, topLeft = Offset(markerX - youText.size.width / 2f, markerY + 8f))
-}
+                val fontSize = (if (displayName.length > 15) 7.5f else 8.5f) * zoom.coerceIn(0.8f, 1.3f)
+                val roomTextResult = textMeasurer.measure(
+                    text = AnnotatedString(displayName),
+                    style = TextStyle(
+                        color = textColor,
+                        fontSize = fontSize.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                )
 
-/**
- * Strict Corridor Navigation Path Drawing:
- * Traverses node-by-node along the corridor graph, strictly through hallways.
- * Will NEVER intersect or overlap room boxes!
- */
-private fun DrawScope.drawStrictCorridorNavigationPath(
-    left: Float,
-    top: Float,
-    side: Float,
-    route: HospitalRoute,
-    textMeasurer: TextMeasurer
-) {
-    val nodes = route.pathNodes
-    if (nodes.size < 2) return
+                // Only draw if label fits reasonably
+                val rx = canvasLabelPos.x - roomTextResult.size.width / 2f
+                val ry = canvasLabelPos.y - roomTextResult.size.height / 2f
+                drawText(roomTextResult, topLeft = Offset(rx, ry))
+            }
+        }
 
-    val navPath = Path().apply {
-        val first = nodes.first()
-        moveTo(left + first.x * side, top + first.y * side)
-        for (i in 1 until nodes.size) {
-            val node = nodes[i]
-            lineTo(left + node.x * side, top + node.y * side)
+        // Draw Start Pin Badge
+        if (isStart) {
+            drawCircle(Color(0xFF10B981), radius = 10f, center = Offset(canvasLabelPos.x, canvasLabelPos.y - 14f))
+            drawCircle(Color.White, radius = 5f, center = Offset(canvasLabelPos.x, canvasLabelPos.y - 14f))
+        }
+
+        // Draw Destination Pin Badge
+        if (isDest) {
+            drawCircle(Color(0xFFEF4444), radius = 10f, center = Offset(canvasLabelPos.x, canvasLabelPos.y - 14f))
+            drawCircle(Color.White, radius = 5f, center = Offset(canvasLabelPos.x, canvasLabelPos.y - 14f))
         }
     }
 
-    // Outer glow path
-    drawPath(
-        path = navPath,
-        color = Color(0xFFFFCDD2).copy(alpha = 0.85f),
-        style = Stroke(width = 8f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-    )
+    // 4. Draw Section Labels from Floor JSON
+    for (flLabel in floor.labels) {
+        val labelPos = toCanvas(flLabel.x, flLabel.y)
+        val textStr = if (language == AppLanguage.ENGLISH && flLabel.nameEn.isNotEmpty()) flLabel.nameEn else flLabel.name
+        val meas = textMeasurer.measure(
+            text = AnnotatedString(textStr),
+            style = TextStyle(
+                color = Color(0xFF1E3A8A),
+                fontSize = 9.sp * zoom.coerceIn(0.8f, 1.2f),
+                fontWeight = FontWeight.Bold
+            )
+        )
+        // Background pill
+        val pillPadding = 4f
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.85f),
+            topLeft = Offset(labelPos.x - pillPadding, labelPos.y - pillPadding),
+            size = Size(meas.size.width + pillPadding * 2, meas.size.height + pillPadding * 2),
+            cornerRadius = CornerRadius(6f, 6f)
+        )
+        drawText(meas, topLeft = labelPos)
+    }
 
-    // Solid vivid red route line
-    drawPath(
-        path = navPath,
-        color = Color(0xFFE53935),
-        style = Stroke(width = 4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-    )
+    // 5. Draw Navigation Path
+    if (currentRoute != null) {
+        val floorSegments = currentRoute.segments.filter { it.floorLevel == floor.level }
+        for (seg in floorSegments) {
+            if (seg.points.size >= 2) {
+                val routePath = Path()
+                val first = toCanvas(seg.points[0].x, seg.points[0].y)
+                routePath.moveTo(first.x, first.y)
+                for (i in 1 until seg.points.size) {
+                    val p = toCanvas(seg.points[i].x, seg.points[i].y)
+                    routePath.lineTo(p.x, p.y)
+                }
 
-    // Start Pin (A)
-    val startNode = nodes.first()
-    drawPin(Offset(left + startNode.x * side, top + startNode.y * side), "A", Color(0xFF2E7D32), textMeasurer)
+                // Outer cyan glow
+                drawPath(
+                    path = routePath,
+                    color = Color(0x660077D7),
+                    style = Stroke(width = 8f * zoom.coerceIn(0.8f, 1.5f), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                )
+                // Main route line
+                drawPath(
+                    path = routePath,
+                    color = Color(0xFF0077D7),
+                    style = Stroke(width = 4f * zoom.coerceIn(0.8f, 1.5f), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                )
 
-    // Destination Pin (B)
-    val destNode = nodes.last()
-    drawPin(Offset(left + destNode.x * side, top + destNode.y * side), "B", Color(0xFFD32F2F), textMeasurer)
+                // Draw dots along waypoints
+                for (p in seg.points) {
+                    val cp = toCanvas(p.x, p.y)
+                    drawCircle(Color.White, radius = 3.5f, center = cp)
+                    drawCircle(Color(0xFF0077D7), radius = 2f, center = cp)
+                }
+            }
+        }
+    }
+
+    // 6. Legend Box at Bottom Right
+    drawLegendBox(originX + fw * scale - 180f, originY + fh * scale - 70f, language, textMeasurer)
 }
 
-private fun DrawScope.drawPin(
-    center: Offset,
-    label: String,
-    color: Color,
-    textMeasurer: TextMeasurer
+// -----------------------------------------------------------------------------
+// 3. 3D ISOMETRIC MULTI-FLOOR VIEW (Tất cả / All)
+// -----------------------------------------------------------------------------
+
+private fun DrawScope.drawIsometricBuildingMap(
+    canvasWidth: Float,
+    canvasHeight: Float,
+    floors: List<Floor>,
+    currentRoute: HospitalRoute?,
+    startRoom: Room?,
+    destRoom: Room?,
+    language: AppLanguage,
+    zoom: Float,
+    panX: Float,
+    panY: Float,
+    textMeasurer: TextMeasurer,
+    onSelectFloor: (Int?) -> Unit
 ) {
-    drawCircle(color.copy(alpha = 0.28f), 12f, center)
-    drawCircle(color, 9f, center)
-    val txt = textMeasurer.measure(
-        text = AnnotatedString(label),
-        style = TextStyle(color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
-    )
-    drawText(textLayoutResult = txt, topLeft = Offset(center.x - txt.size.width / 2f, center.y - txt.size.height / 2f))
+    val activeFloors = floors.filter { !it.isTodo }.sortedBy { it.level } // Floor 2 then Floor 3
+    if (activeFloors.isEmpty()) return
+
+    val baseScale = computeIsoScale(canvasWidth, canvasHeight, zoom)
+    val elevation = 240f * zoom
+
+    fun project(fx: Float, fy: Float, level: Int): Offset {
+        return projectIso(fx, fy, level, canvasWidth, canvasHeight, baseScale, elevation, panX, panY)
+    }
+
+    // 1. Draw Connecting Shafts between Floor 2 and Floor 3 (Stairs & Elevators)
+    val f2 = activeFloors.find { it.level == 2 }
+    val f3 = activeFloors.find { it.level == 3 }
+    if (f2 != null && f3 != null) {
+        val f2Shafts = f2.rooms.filter { it.link != null }.associateBy { it.link!! }
+        val f3Shafts = f3.rooms.filter { it.link != null }.associateBy { it.link!! }
+        val common = f2Shafts.keys.intersect(f3Shafts.keys)
+
+        for (link in common) {
+            val r2 = f2Shafts[link]!!
+            val r3 = f3Shafts[link]!!
+
+            val c2 = r2.labelAt ?: Point2D(r2.polygon.map { it.x }.average().toFloat(), r2.polygon.map { it.y }.average().toFloat())
+            val c3 = r3.labelAt ?: Point2D(r3.polygon.map { it.x }.average().toFloat(), r3.polygon.map { it.y }.average().toFloat())
+
+            val p2 = project(c2.x, c2.y, 2)
+            val p3 = project(c3.x, c3.y, 3)
+
+            // Shaft vertical dashed pillar
+            val shaftColor = if (r2.kind == "elevator") Color(0x8800B4D8) else Color(0x88FB8500)
+            val dash = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
+            drawLine(
+                color = shaftColor,
+                start = p2,
+                end = p3,
+                strokeWidth = 2.5f,
+                pathEffect = dash
+            )
+        }
+    }
+
+    // 2. Render Floors from bottom to top (Floor 2, then Floor 3)
+    for (fl in activeFloors) {
+        val fw = fl.width
+        val fh = fl.height
+
+        // 3D Slab Thickness Extrusion
+        val slabCorners = listOf(
+            project(0f, 0f, fl.level),
+            project(fw, 0f, fl.level),
+            project(fw, fh, fl.level),
+            project(0f, fh, fl.level)
+        )
+
+        // Drop shadow under slab
+        val shadowPath = Path().apply {
+            moveTo(slabCorners[0].x, slabCorners[0].y + 16f)
+            for (i in 1..3) lineTo(slabCorners[i].x, slabCorners[i].y + 16f)
+            close()
+        }
+        drawPath(shadowPath, Color(0x18000000))
+
+        // Side walls (3D thickness: 12px)
+        val sideThickness = 12f
+        val frontWall = Path().apply {
+            moveTo(slabCorners[3].x, slabCorners[3].y)
+            lineTo(slabCorners[2].x, slabCorners[2].y)
+            lineTo(slabCorners[2].x, slabCorners[2].y + sideThickness)
+            lineTo(slabCorners[3].x, slabCorners[3].y + sideThickness)
+            close()
+        }
+        drawPath(frontWall, Color(0xFFCBD5E1))
+
+        val rightWall = Path().apply {
+            moveTo(slabCorners[2].x, slabCorners[2].y)
+            lineTo(slabCorners[1].x, slabCorners[1].y)
+            lineTo(slabCorners[1].x, slabCorners[1].y + sideThickness)
+            lineTo(slabCorners[2].x, slabCorners[2].y + sideThickness)
+            close()
+        }
+        drawPath(rightWall, Color(0xFF94A3B8))
+
+        // Slab Top Face
+        val topSlab = Path().apply {
+            moveTo(slabCorners[0].x, slabCorners[0].y)
+            for (i in 1..3) lineTo(slabCorners[i].x, slabCorners[i].y)
+            close()
+        }
+        drawPath(topSlab, Color(0xFFF8FAFC))
+        drawPath(topSlab, Color(0xFFCBD5E1), style = Stroke(width = 1.5f))
+
+        // Floating Isometric Floor Tag Badge
+        val floorTagPos = slabCorners[0]
+        val floorTitle = HospitalLocalization.getFloorLabel(fl.level, language).uppercase()
+        val tagResult = textMeasurer.measure(
+            text = AnnotatedString("$floorTitle (${fl.rooms.size} phòng)"),
+            style = TextStyle(color = Color(0xFF0077D7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        )
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.92f),
+            topLeft = Offset(floorTagPos.x - 120f, floorTagPos.y - 12f),
+            size = Size(tagResult.size.width + 16f, tagResult.size.height + 10f),
+            cornerRadius = CornerRadius(8f, 8f)
+        )
+        drawRoundRect(
+            color = Color(0xFF0077D7),
+            topLeft = Offset(floorTagPos.x - 120f, floorTagPos.y - 12f),
+            size = Size(tagResult.size.width + 16f, tagResult.size.height + 10f),
+            cornerRadius = CornerRadius(8f, 8f),
+            style = Stroke(1.2f)
+        )
+        drawText(tagResult, topLeft = Offset(floorTagPos.x - 112f, floorTagPos.y - 7f))
+
+        // Render Rooms in Isometric
+        for (room in fl.rooms) {
+            val poly = room.polygon
+            if (poly.isEmpty()) continue
+
+            val isoPath = Path().apply {
+                val first = project(poly[0].x, poly[0].y, fl.level)
+                moveTo(first.x, first.y)
+                for (i in 1 until poly.size) {
+                    val p = project(poly[i].x, poly[i].y, fl.level)
+                    lineTo(p.x, p.y)
+                }
+                close()
+            }
+
+            val roomBgColor = try {
+                Color(android.graphics.Color.parseColor(room.colorHex))
+            } catch (_: Exception) {
+                Color(0xFFCFE0E8)
+            }
+            drawPath(isoPath, roomBgColor)
+
+            val isStart = room.id == startRoom?.id
+            val isDest = room.id == destRoom?.id
+
+            if (isDest) {
+                drawPath(isoPath, Color(0x66EF4444), style = Stroke(width = 6f))
+                drawPath(isoPath, Color(0xFFEF4444), style = Stroke(width = 3.5f))
+            } else if (isStart) {
+                drawPath(isoPath, Color(0x6610B981), style = Stroke(width = 6f))
+                drawPath(isoPath, Color(0xFF10B981), style = Stroke(width = 3.5f))
+            } else {
+                drawPath(isoPath, Color.White.copy(alpha = 0.55f), style = Stroke(width = 1f))
+            }
+
+            // Room Centroid for label
+            val c = room.labelAt ?: Point2D(poly.map { it.x }.average().toFloat(), poly.map { it.y }.average().toFloat())
+            val isoCenter = project(c.x, c.y, fl.level)
+
+            if (room.kind == "elevator") {
+                drawCircle(Color(0xFF2E7D32), radius = 6f * zoom.coerceIn(0.7f, 1.3f), center = isoCenter)
+            } else if (room.kind == "stair") {
+                drawCircle(Color(0xFFE65100), radius = 6f * zoom.coerceIn(0.7f, 1.3f), center = isoCenter)
+            } else if (zoom >= 0.9f && (room.name.isNotBlank() || room.nameEn.isNotBlank())) {
+                val name = if (language == AppLanguage.ENGLISH && room.nameEn.isNotEmpty()) room.nameEn else room.name
+                val textColor = try {
+                    Color(android.graphics.Color.parseColor(room.textColorHex))
+                } catch (_: Exception) {
+                    Color(0xFF222222)
+                }
+                val meas = textMeasurer.measure(
+                    text = AnnotatedString(name.take(12)),
+                    style = TextStyle(color = textColor, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                )
+                drawText(meas, topLeft = Offset(isoCenter.x - meas.size.width / 2f, isoCenter.y - meas.size.height / 2f))
+            }
+
+            if (isStart) {
+                drawCircle(Color(0xFF10B981), radius = 8f, center = Offset(isoCenter.x, isoCenter.y - 12f))
+                drawCircle(Color.White, radius = 4f, center = Offset(isoCenter.x, isoCenter.y - 12f))
+            }
+            if (isDest) {
+                drawCircle(Color(0xFFEF4444), radius = 8f, center = Offset(isoCenter.x, isoCenter.y - 12f))
+                drawCircle(Color.White, radius = 4f, center = Offset(isoCenter.x, isoCenter.y - 12f))
+            }
+        }
+    }
+
+    // 3. Draw 3D Multi-Floor Route
+    if (currentRoute != null) {
+        // Draw segments on each floor
+        for (seg in currentRoute.segments) {
+            if (seg.points.size >= 2) {
+                val isoRoute = Path()
+                val first = project(seg.points[0].x, seg.points[0].y, seg.floorLevel)
+                isoRoute.moveTo(first.x, first.y)
+                for (i in 1 until seg.points.size) {
+                    val p = project(seg.points[i].x, seg.points[i].y, seg.floorLevel)
+                    isoRoute.lineTo(p.x, p.y)
+                }
+
+                drawPath(isoRoute, Color(0x660077D7), style = Stroke(width = 8f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawPath(isoRoute, Color(0xFF0077D7), style = Stroke(width = 4f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+        }
+
+        // If transfer exists, draw vertical climbing laser line between floors
+        currentRoute.transfer?.let { transfer ->
+            val pA = transfer.roomA.labelAt ?: Point2D(transfer.roomA.polygon.map { it.x }.average().toFloat(), transfer.roomA.polygon.map { it.y }.average().toFloat())
+            val pB = transfer.roomB.labelAt ?: Point2D(transfer.roomB.polygon.map { it.x }.average().toFloat(), transfer.roomB.polygon.map { it.y }.average().toFloat())
+
+            val isoA = project(pA.x, pA.y, transfer.roomA.floorLevel)
+            val isoB = project(pB.x, pB.y, transfer.roomB.floorLevel)
+
+            drawLine(
+                color = Color(0xFF00F5D4),
+                start = isoA,
+                end = isoB,
+                strokeWidth = 5f,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = Color(0xFF0077D7),
+                start = isoA,
+                end = isoB,
+                strokeWidth = 3f,
+                cap = StrokeCap.Round
+            )
+        }
+    }
 }
 
-private fun DrawScope.drawLegendBoxSquare(
+// -----------------------------------------------------------------------------
+// HELPER MATH & PROJECTION
+// -----------------------------------------------------------------------------
+
+private fun computeIsoScale(canvasWidth: Float, canvasHeight: Float, zoom: Float): Float {
+    val fw = 1795f
+    val fh = 734f
+    val cosA = 0.866f
+    val sinA = 0.500f
+    val spanX = (fw + fh) * cosA * 0.5f
+    val spanY = (fw + fh) * sinA * 0.45f + 260f
+    return min((canvasWidth - 60f) / spanX, (canvasHeight - 160f) / spanY) * 0.95f * zoom
+}
+
+private fun projectIso(
+    fx: Float,
+    fy: Float,
+    level: Int,
+    canvasWidth: Float,
+    canvasHeight: Float,
+    scale: Float,
+    elevation: Float,
+    panX: Float,
+    panY: Float
+): Offset {
+    val fw = 1795f
+    val fh = 734f
+    val cosA = 0.866f
+    val sinA = 0.500f
+
+    val u = (fx - fw / 2f) * scale
+    val v = (fy - fh / 2f) * scale
+
+    val sx = canvasWidth / 2f + (u - v) * cosA + panX
+    val sy = canvasHeight / 2f + 40f + (u + v) * sinA * 0.55f - (level - 2) * elevation + panY
+    return Offset(sx, sy)
+}
+
+private fun pointInPolygon(x: Float, y: Float, poly: List<Point2D>): Boolean {
+    var inside = false
+    var j = poly.size - 1
+    for (i in poly.indices) {
+        val pi = poly[i]
+        val pj = poly[j]
+        if ((pi.y > y) != (pj.y > y) &&
+            x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x
+        ) {
+            inside = !inside
+        }
+        j = i
+    }
+    return inside
+}
+
+private fun pointInPolygonOffset(x: Float, y: Float, poly: List<Offset>): Boolean {
+    var inside = false
+    var j = poly.size - 1
+    for (i in poly.indices) {
+        val pi = poly[i]
+        val pj = poly[j]
+        if ((pi.y > y) != (pj.y > y) &&
+            x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x
+        ) {
+            inside = !inside
+        }
+        j = i
+    }
+    return inside
+}
+
+private fun DrawScope.drawBlueprintGrid(width: Float, height: Float) {
+    val gridColor = Color(0xFFE2E8F0)
+    val step = 32f
+    var x = 0f
+    while (x < width) {
+        drawLine(gridColor, Offset(x, 0f), Offset(x, height), strokeWidth = 0.8f)
+        x += step
+    }
+    var y = 0f
+    while (y < height) {
+        drawLine(gridColor, Offset(0f, y), Offset(width, y), strokeWidth = 0.8f)
+        y += step
+    }
+}
+
+private fun DrawScope.drawLegendBox(
     left: Float,
     top: Float,
-    side: Float,
     language: AppLanguage,
     textMeasurer: TextMeasurer
 ) {
-    val lx = left + side * 0.70f
-    val ly = top + side * 0.86f
-    val lw = side * 0.26f
-    val lh = side * 0.10f
-
     drawRoundRect(
-        color = Color(0xFFFFFBEB),
-        topLeft = Offset(lx, ly),
-        size = Size(lw, lh),
-        cornerRadius = CornerRadius(5f, 5f)
+        color = Color.White.copy(alpha = 0.92f),
+        topLeft = Offset(left, top),
+        size = Size(170f, 62f),
+        cornerRadius = CornerRadius(8f, 8f)
     )
     drawRoundRect(
-        color = Color(0xFFFDE68A),
-        topLeft = Offset(lx, ly),
-        size = Size(lw, lh),
-        cornerRadius = CornerRadius(5f, 5f),
+        color = Color(0xFFCBD5E1),
+        topLeft = Offset(left, top),
+        size = Size(170f, 62f),
+        cornerRadius = CornerRadius(8f, 8f),
         style = Stroke(1f)
     )
 
-    val noteTitle = textMeasurer.measure(
-        text = AnnotatedString(HospitalLocalization.getLegendLabel(language)),
-        style = TextStyle(color = Color(0xFF92400E), fontSize = 7.sp, fontWeight = FontWeight.Bold)
-    )
-    drawText(textLayoutResult = noteTitle, topLeft = Offset(lx + 6f, ly + 4f))
+    val title = if (language == AppLanguage.VIETNAMESE) "CHÚ THÍCH" else "LEGEND"
+    val t = textMeasurer.measure(AnnotatedString(title), TextStyle(color = Color(0xFF475569), fontSize = 8.sp, fontWeight = FontWeight.Bold))
+    drawText(t, topLeft = Offset(left + 8f, top + 5f))
 
-    val exitRed = Color(0xFFDC2626)
-    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 3f), 0f)
-    drawLine(exitRed, Offset(lx + 6f, ly + 18f), Offset(lx + 24f, ly + 18f), strokeWidth = 1.8f, pathEffect = dashEffect)
-
-    val exitText = textMeasurer.measure(
-        text = AnnotatedString(HospitalLocalization.getExitLabel(language)),
-        style = TextStyle(color = exitRed, fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
+    // Items
+    val items = listOf(
+        Pair(Color(0xFFCFE0E8), if (language == AppLanguage.VIETNAMESE) "Phòng khám" else "Clinics"),
+        Pair(Color(0xFF1F5F63), if (language == AppLanguage.VIETNAMESE) "Phẫu thuật" else "Surgery"),
+        Pair(Color(0xFFA9C3A4), if (language == AppLanguage.VIETNAMESE) "Thang máy" else "Elevator"),
+        Pair(Color(0xFFE89A3C), if (language == AppLanguage.VIETNAMESE) "Thang bộ" else "Stairs")
     )
-    drawText(textLayoutResult = exitText, topLeft = Offset(lx + 28f, ly + 13f))
+
+    var ix = left + 8f
+    var iy = top + 20f
+    for ((idx, it) in items.withIndex()) {
+        drawCircle(it.first, radius = 4f, center = Offset(ix + 4f, iy + 6f))
+        val text = textMeasurer.measure(AnnotatedString(it.second), TextStyle(color = Color(0xFF334155), fontSize = 7.5.sp))
+        drawText(text, topLeft = Offset(ix + 12f, iy))
+        if (idx % 2 == 1) {
+            ix = left + 8f
+            iy += 18f
+        } else {
+            ix += 80f
+        }
+    }
+}
+
+@Composable
+private fun MapControlButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = Color.White,
+        shadowElevation = 3.dp,
+        modifier = Modifier
+            .size(42.dp)
+            .testTag(testTag)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = Color(0xFF1E293B),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
 }

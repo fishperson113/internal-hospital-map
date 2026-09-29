@@ -45,7 +45,7 @@ fun HospitalMapScreen(
                 onZoomOut = { viewModel.onZoomOut() },
                 onResetView = { viewModel.onResetView() },
                 onRoomClick = { room -> viewModel.onSelectDestRoom(room) },
-                onSelectFloor1 = { viewModel.onSelectFloor(1) },
+                onSelectFloor = { level -> viewModel.onSelectFloor(level) },
                 modifier = Modifier.fillMaxSize()
             )
 

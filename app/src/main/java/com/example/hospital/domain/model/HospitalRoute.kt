@@ -20,6 +20,19 @@ data class RouteStep(
     val iconType: StepIconType = StepIconType.WALK
 )
 
+data class RouteSegment(
+    val floorLevel: Int,
+    val points: List<Point2D>,
+    val length: Float
+)
+
+data class TransferInfo(
+    val link: String,
+    val kind: String,
+    val roomA: Room,
+    val roomB: Room
+)
+
 data class HospitalRoute(
     val startNode: MapNode,
     val destNode: MapNode,
@@ -28,5 +41,7 @@ data class HospitalRoute(
     val estimatedDurationMinutes: Int,
     val steps: List<RouteStep>,
     val pathNodeIds: List<String>,
-    val pathNodes: List<MapNode> = emptyList()
+    val pathNodes: List<MapNode> = emptyList(),
+    val segments: List<RouteSegment> = emptyList(),
+    val transfer: TransferInfo? = null
 )

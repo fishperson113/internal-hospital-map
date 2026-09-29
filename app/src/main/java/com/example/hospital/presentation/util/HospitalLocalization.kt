@@ -12,8 +12,8 @@ object HospitalLocalization {
     }
 
     fun getSubtitle(lang: AppLanguage): String = when (lang) {
-        AppLanguage.VIETNAMESE -> "Sơ đồ chỉ đường Tầng 1"
-        AppLanguage.ENGLISH -> "Floor 1 Indoor Navigation"
+        AppLanguage.VIETNAMESE -> "Sơ đồ toà nhà & Tìm đường"
+        AppLanguage.ENGLISH -> "Building Map & Indoor Navigation"
     }
 
     fun getSearchHint(lang: AppLanguage): String = when (lang) {
@@ -131,7 +131,10 @@ object HospitalLocalization {
         AppLanguage.ENGLISH -> "Arrive at $destName (Floor $floorLevel)"
     }
 
-    fun getRoomDisplayName(roomId: String, fallback: String, lang: AppLanguage): String {
+    fun getRoomDisplayName(roomId: String, fallback: String, lang: AppLanguage, nameEn: String = ""): String {
+        if (lang == AppLanguage.ENGLISH && nameEn.isNotBlank()) {
+            return nameEn
+        }
         return when (roomId) {
             "room_you_are_here", "node_you_are_here" -> if (lang == AppLanguage.VIETNAMESE) "Bạn ở đây" else "You are here"
             "room_main_entrance", "node_main_entrance" -> if (lang == AppLanguage.VIETNAMESE) "Tiền sảnh" else "Main Entrance"

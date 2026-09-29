@@ -36,20 +36,20 @@ fun FloorSelectorRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // "Tất cả / All" chip (Multi-floor stacked view)
+        // "Tất cả / All" chip (Multi-floor isometric view)
         val isAllSelected = selectedFloorLevel == null
         FloorChip(
-            label = HospitalLocalization.getAllFloorsLabel(language),
+            label = HospitalLocalization.getAllFloorsLabel(language) + " (3D)",
             isSelected = isAllSelected,
             onClick = { onSelectFloor(null) },
             testTag = "floor_chip_all"
         )
 
-        // Floor chips 1..5
+        // Floor chips
         floors.forEach { floor ->
             val isSelected = selectedFloorLevel == floor.level
             FloorChip(
-                label = HospitalLocalization.getFloorLabel(floor.level, language),
+                label = HospitalLocalization.getFloorLabel(floor.level, language) + if (floor.isTodo) " (TODO)" else "",
                 isSelected = isSelected,
                 onClick = { onSelectFloor(floor.level) },
                 testTag = "floor_chip_${floor.level}"

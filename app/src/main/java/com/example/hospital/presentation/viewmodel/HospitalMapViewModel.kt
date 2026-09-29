@@ -30,15 +30,21 @@ class HospitalMapViewModel(
         viewModelScope.launch {
             getHospitalMapUseCase().collect { mapData ->
                 val allRooms = mapData.floors.flatMap { it.rooms }
-                val start = allRooms.find { it.id == "room_you_are_here" } ?: allRooms.find { it.id == "room_101" } ?: allRooms.firstOrNull()
-                val dest = allRooms.find { it.id == "room_emergency_b" } ?: allRooms.find { it.id == "room_pharmacy_service" } ?: allRooms.lastOrNull()
+                val start = allRooms.find { it.id == "tang-2_48" }
+                    ?: allRooms.find { it.floorLevel == 2 && it.name.contains("ĐĂNG KÝ") }
+                    ?: allRooms.find { it.floorLevel == 2 }
+                    ?: allRooms.firstOrNull()
+                val dest = allRooms.find { it.id == "tang-2_59" }
+                    ?: allRooms.find { it.floorLevel == 2 && it.name.contains("NỘI") }
+                    ?: allRooms.find { it.floorLevel == 2 && it.name.contains("SIÊU ÂM") }
+                    ?: allRooms.lastOrNull()
 
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         hospital = mapData.hospital,
                         floors = mapData.floors,
-                        selectedFloorLevel = 1,
+                        selectedFloorLevel = 2,
                         startRoom = start,
                         destRoom = dest
                     )

@@ -18,6 +18,17 @@ data class Hospital(
     val address: String = "Sơ đồ chỉ đường nội viện"
 )
 
+data class Point2D(val x: Float, val y: Float)
+
+data class FloorLabel(
+    val name: String,
+    val nameEn: String,
+    val x: Float,
+    val y: Float,
+    val w: Float,
+    val h: Float
+)
+
 data class Room(
     val id: String,
     val code: String,
@@ -29,14 +40,27 @@ data class Room(
     val boundsLeft: Float = 0f,
     val boundsTop: Float = 0f,
     val boundsWidth: Float = 0f,
-    val boundsHeight: Float = 0f
+    val boundsHeight: Float = 0f,
+    val nameEn: String = "",
+    val colorHex: String = "#cfe0e8",
+    val textColorHex: String = "#222222",
+    val kind: String? = null,
+    val link: String? = null,
+    val polygon: List<Point2D> = emptyList(),
+    val labelAt: Point2D? = null
 )
 
 data class Floor(
     val level: Int,
     val name: String,
     val description: String,
-    val rooms: List<Room>
+    val rooms: List<Room>,
+    val floorId: String = "tang-$level",
+    val width: Float = 1795f,
+    val height: Float = 734f,
+    val isTodo: Boolean = false,
+    val labels: List<FloorLabel> = emptyList(),
+    val links: List<String> = emptyList()
 )
 
 data class MapNode(

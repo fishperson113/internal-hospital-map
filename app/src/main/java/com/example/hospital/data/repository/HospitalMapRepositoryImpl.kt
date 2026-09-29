@@ -40,6 +40,7 @@ class HospitalMapRepositoryImpl(
             val descEn = com.example.hospital.presentation.util.HospitalLocalization.getRoomDescription(room.id, room.description, com.example.hospital.presentation.util.AppLanguage.ENGLISH).lowercase()
 
             room.name.lowercase().contains(lowerQuery) ||
+                    room.nameEn.lowercase().contains(lowerQuery) ||
                     nameVi.contains(lowerQuery) ||
                     nameEn.contains(lowerQuery) ||
                     descVi.contains(lowerQuery) ||

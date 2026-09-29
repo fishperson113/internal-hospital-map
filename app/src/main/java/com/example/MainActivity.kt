@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Render latest indoor navigation with polygon floors & isometric 3D view
         setContent {
             MyApplicationTheme {
                 com.example.hospital.presentation.ui.HospitalMapScreen(viewModel = hospitalMapViewModel)
