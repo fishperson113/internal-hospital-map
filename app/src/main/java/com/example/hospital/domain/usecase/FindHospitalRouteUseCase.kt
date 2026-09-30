@@ -17,7 +17,9 @@ class FindHospitalRouteUseCase(
     suspend operator fun invoke(
         startRoomOrNodeId: String,
         destRoomOrNodeId: String,
-        language: AppLanguage = AppLanguage.VIETNAMESE
+        language: AppLanguage = AppLanguage.VIETNAMESE,
+        // null = any shaft (fastest); "elevator" or "stair" = only use that kind to change floors
+        preferredTransferKind: String? = null
     ): HospitalRoute? {
         val mapData = repository.getHospitalMap().first()
         val graph = mapData.graph
@@ -38,10 +40,13 @@ class FindHospitalRouteUseCase(
                         return buildSingleFloorRoute(startFloor, startRoom, destRoom, pathResult, language)
                     }
                 } else {
-                    val multiFloorRoute = findMultiFloorRoute(startFloor, destFloor, startRoom, destRoom, language)
+                    val multiFloorRoute = findMultiFloorRoute(startFloor, destFloor, startRoom, destRoom, language, preferredTransferKind)
                     if (multiFloorRoute != null) {
                         return multiFloorRoute
                     }
+                    // A specific shaft kind was requested but none connects these floors:
+                    // report "no route" instead of silently falling back to the mock graph.
+                    if (preferredTransferKind != null) return null
                 }
             }
         }
@@ -174,7 +179,8 @@ class FindHospitalRouteUseCase(
         floorB: Floor,
         startRoom: Room,
         destRoom: Room,
-        language: AppLanguage
+        language: AppLanguage,
+        preferredTransferKind: String? = null
     ): HospitalRoute? {
         val shaftsA = floorA.rooms.filter { it.link != null }.associateBy { it.link!! }
         val shaftsB = floorB.rooms.filter { it.link != null }.associateBy { it.link!! }
@@ -188,6 +194,7 @@ class FindHospitalRouteUseCase(
         for (link in commonLinks) {
             val rA = shaftsA[link] ?: continue
             val rB = shaftsB[link] ?: continue
+            if (preferredTransferKind != null && rA.kind != preferredTransferKind) continue
 
             val s1 = GridAStarPathfinder.findPathOnFloor(floorA, startRoom, rA) ?: continue
             val s2 = GridAStarPathfinder.findPathOnFloor(floorB, rB, destRoom) ?: continue

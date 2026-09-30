@@ -7,7 +7,6 @@ import com.example.hospital.domain.usecase.FindHospitalRouteUseCase
 import com.example.hospital.domain.usecase.GetHospitalMapUseCase
 import com.example.hospital.domain.usecase.SearchRoomsUseCase
 import com.example.hospital.presentation.viewmodel.HospitalMapViewModel
-import com.example.ui.viewmodel.MapViewModel
 
 class ViewModelFactory(
     private val appContainer: AppContainer
@@ -22,9 +21,6 @@ class ViewModelFactory(
                     searchRoomsUseCase = appContainer.searchRoomsUseCase,
                     findHospitalRouteUseCase = appContainer.findHospitalRouteUseCase
                 ) as T
-            }
-            modelClass.isAssignableFrom(MapViewModel::class.java) -> {
-                MapViewModel(appContainer.mapRepository) as T
             }
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }

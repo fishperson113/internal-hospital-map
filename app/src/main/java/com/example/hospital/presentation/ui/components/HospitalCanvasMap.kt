@@ -1,33 +1,51 @@
 package com.example.hospital.presentation.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.Elevator
+import androidx.compose.material.icons.filled.Stairs
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.*
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.vector.VectorPainter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.*
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hospital.domain.model.Floor
@@ -36,8 +54,32 @@ import com.example.hospital.domain.model.Point2D
 import com.example.hospital.domain.model.Room
 import com.example.hospital.presentation.util.AppLanguage
 import com.example.hospital.presentation.util.HospitalLocalization
-import kotlin.math.*
+import com.example.ui.theme.MapAmber
+import com.example.ui.theme.MapBluePrimary
+import com.example.ui.theme.MapCanvasBackground
+import com.example.ui.theme.MapElevatorGreen
+import com.example.ui.theme.MapGreenSuccess
+import com.example.ui.theme.MapInk
+import com.example.ui.theme.MapInkMuted
+import com.example.ui.theme.MapInkSubtle
+import com.example.ui.theme.MapPlateStroke
+import com.example.ui.theme.MapRedAlert
+import com.example.ui.theme.MapSlabSide
+import kotlin.math.max
+import kotlin.math.min
 
+/**
+ * Full-screen indoor map.
+ *
+ * - selectedFloorLevel == null → isometric stack of every floor ("Tất cả").
+ *   Drag = orbit (spin/tilt), pinch = zoom, tap a floor = open it in 2D.
+ * - selectedFloorLevel == N    → flat 2D plan of floor N, auto-rotated 90° on portrait
+ *   screens so the wide plan (≈2.4:1) fills the phone. Drag = pan, pinch = zoom, tap room = details.
+ *
+ * Switching between the two animates one camera (tilt/spin/zoom/pan) + per-floor Z/alpha
+ * over [MapCameraMath.TRANSITION_MS] ms, so the chosen floor flies out of the stack and flattens.
+ * Room labels are drawn upright in screen space and only when they fit inside their room.
+ */
 @Composable
 fun HospitalCanvasMap(
     floors: List<Floor>,
@@ -45,350 +87,175 @@ fun HospitalCanvasMap(
     currentRoute: HospitalRoute?,
     startRoom: Room?,
     destRoom: Room?,
+    selectedRoom: Room?,
     language: AppLanguage,
-    zoomLevel: Float,
-    panOffsetX: Float,
-    panOffsetY: Float,
-    onPan: (Float, Float) -> Unit,
-    onZoomIn: () -> Unit,
-    onZoomOut: () -> Unit,
-    onResetView: () -> Unit,
+    viewportInsets: MapViewportInsets,
+    recenterRequest: Int,
     onRoomClick: (Room) -> Unit,
     onSelectFloor: (Int?) -> Unit,
+    onEmptyTap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val textMeasurer = rememberTextMeasurer()
+    val textMeasurer = rememberTextMeasurer(cacheSize = 256)
+    val elevatorPainter = rememberVectorPainter(Icons.Filled.Elevator)
+    val stairsPainter = rememberVectorPainter(Icons.Filled.Stairs)
 
-    // Single Floor selection
-    val currentFloor = if (selectedFloorLevel != null) {
-        floors.find { it.level == selectedFloorLevel }
-    } else null
-
-    // If Floor 1 is selected, show TODO placeholder
-    if (currentFloor != null && currentFloor.isTodo) {
-        FloorTodoPlaceholder(
-            floorLevel = currentFloor.level,
-            language = language,
-            onSelectFloor = onSelectFloor,
-            modifier = modifier
-        )
-        return
+    val sortedFloors = remember(floors) { floors.sortedBy { it.level } }
+    val dataFloor = sortedFloors.firstOrNull { !it.isTodo }
+    val planW = dataFloor?.width ?: 1795f
+    val planH = dataFloor?.height ?: 734f
+    val shafts = remember(sortedFloors) { connectingShafts(sortedFloors) }
+    val labelTexts = remember(sortedFloors, language) {
+        sortedFloors.flatMap { it.rooms }.associate { it.id to HospitalLocalization.roomLabel(it, language) }
     }
+    val routeLevels = remember(currentRoute) { currentRoute?.segments?.map { it.floorLevel }?.toSet() ?: emptySet() }
 
-    BoxWithConstraints(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color(0xFFF1F5F9))
-            .pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    onPan(dragAmount.x, dragAmount.y)
+    var viewSize by remember { mutableStateOf(IntSize.Zero) }
+    var camera by remember { mutableStateOf<MapCamera?>(null) }
+    var floorVisuals by remember { mutableStateOf<Map<Int, FloorVisual>>(emptyMap()) }
+    var isTransitioning by remember { mutableStateOf(false) }
+    var fitScale by remember { mutableFloatStateOf(1f) }
+    var isoTilt by remember { mutableFloatStateOf(MapCameraMath.ISO_TILT) }
+    var isoSpin by remember { mutableFloatStateOf(MapCameraMath.ISO_SPIN) }
+    val overlayAlpha = remember { Animatable(1f) }
+
+    val latestInsets by rememberUpdatedState(viewportInsets)
+    val latestOnRoomClick by rememberUpdatedState(onRoomClick)
+    val latestOnSelectFloor by rememberUpdatedState(onSelectFloor)
+    val latestOnEmptyTap by rememberUpdatedState(onEmptyTap)
+    val insetsReady = viewportInsets.top > 0f
+
+    // Camera fit + 3D ↔ 2D transition
+    LaunchedEffect(selectedFloorLevel, recenterRequest, viewSize, sortedFloors, insetsReady) {
+        if (viewSize.width == 0 || viewSize.height == 0 || sortedFloors.isEmpty()) return@LaunchedEffect
+        val w = viewSize.width.toFloat()
+        val h = viewSize.height.toFloat()
+        val selIdx = selectedFloorLevel?.let { l -> sortedFloors.indexOfFirst { it.level == l } }?.takeIf { it >= 0 }
+        val targetVis = sortedFloors.mapIndexed { i, f ->
+            f.level to FloorVisual(
+                z = MapCameraMath.floorZ(i, sortedFloors.size, selIdx),
+                alpha = if (selIdx == null || selIdx == i) 1f else 0f
+            )
+        }.toMap()
+        val targetCam = if (selIdx == null) {
+            MapCameraMath.fit(planW, planH, targetVis.values.map { it.z }, isoTilt, isoSpin, w, h, latestInsets, fillWidth2D = false)
+        } else {
+            val spin = if (h > w) 90f else 0f // auto-rotate: portrait → rotate the wide plan
+            MapCameraMath.fit(planW, planH, listOf(0f), 0f, spin, w, h, latestInsets, fillWidth2D = true)
+        }
+        fitScale = targetCam.scale
+        val fromCam = camera
+        val fromVis = floorVisuals
+        if (fromCam == null) {
+            camera = targetCam
+            floorVisuals = targetVis
+            return@LaunchedEffect
+        }
+        isTransitioning = true
+        try {
+            val progress = Animatable(0f)
+            progress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(MapCameraMath.TRANSITION_MS, easing = CubicBezierEasing(0.6f, 0f, 0.2f, 1f))
+            ) {
+                val k = value
+                camera = MapCameraMath.lerp(fromCam, targetCam, k)
+                floorVisuals = targetVis.mapValues { (level, to) ->
+                    val from = fromVis[level] ?: to
+                    val appearing = to.alpha > from.alpha
+                    // appearing floors fade in slightly later, leaving floors fade out early
+                    val ak = if (appearing) ((k - 0.2f) / 0.55f).coerceIn(0f, 1f) else (k / 0.55f).coerceIn(0f, 1f)
+                    FloorVisual(from.z + (to.z - from.z) * k, from.alpha + (to.alpha - from.alpha) * ak)
                 }
             }
-            .pointerInput(selectedFloorLevel, floors, zoomLevel, panOffsetX, panOffsetY) {
-                detectTapGestures { tapOffset ->
-                    if (selectedFloorLevel != null && currentFloor != null && !currentFloor.isTodo) {
-                        // 2D Single Floor Hit-Test
-                        val fw = currentFloor.width.coerceAtLeast(100f)
-                        val fh = currentFloor.height.coerceAtLeast(100f)
-                        val scale = min((size.width - 32f) / fw, (size.height - 180f) / fh) * zoomLevel
-                        val originX = (size.width - fw * scale) / 2f + panOffsetX
-                        val originY = (size.height - fh * scale) / 2f + 30f + panOffsetY
+        } finally {
+            isTransitioning = false
+        }
+    }
 
-                        val fx = (tapOffset.x - originX) / scale
-                        val fy = (tapOffset.y - originY) / scale
+    // Labels / pins / floor tags fade back in after each transition
+    LaunchedEffect(isTransitioning) {
+        if (isTransitioning) overlayAlpha.snapTo(0f) else overlayAlpha.animateTo(1f, tween(240))
+    }
 
-                        val clicked = currentFloor.rooms.find { room ->
-                            if (room.polygon.isNotEmpty()) {
-                                pointInPolygon(fx, fy, room.polygon)
-                            } else {
-                                fx in room.boundsLeft..(room.boundsLeft + room.boundsWidth) &&
-                                        fy in room.boundsTop..(room.boundsTop + room.boundsHeight)
-                            }
-                        }
-                        if (clicked != null) {
-                            onRoomClick(clicked)
-                        }
-                    } else if (selectedFloorLevel == null) {
-                        // 3D Isometric Multi-Floor Hit-Test
-                        val activeFloors = floors.filter { !it.isTodo }
-                        // Test upper floor first (Floor 3), then lower (Floor 2)
-                        val sortedForHit = activeFloors.sortedByDescending { it.level }
-                        val baseScale = computeIsoScale(size.width.toFloat(), size.height.toFloat(), zoomLevel)
-                        val elevation = 240f * zoomLevel
+    val is3dView = selectedFloorLevel == null
 
-                        for (fl in sortedForHit) {
-                            for (room in fl.rooms) {
-                                if (room.polygon.isEmpty()) continue
-                                val isoPoly = room.polygon.map { pt ->
-                                    projectIso(
-                                        pt.x, pt.y, fl.level,
-                                        size.width.toFloat(), size.height.toFloat(),
-                                        baseScale, elevation, panOffsetX, panOffsetY
-                                    )
-                                }
-                                if (pointInPolygonOffset(tapOffset.x, tapOffset.y, isoPoly)) {
-                                    onRoomClick(room)
-                                    return@detectTapGestures
-                                }
-                            }
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { viewSize = it }
+            .pointerInput(is3dView) {
+                detectTransformGestures { centroid, pan, zoom, _ ->
+                    val c = camera ?: return@detectTransformGestures
+                    if (isTransitioning) return@detectTransformGestures
+                    var next = MapCameraMath.zoomAbout(
+                        c, zoom, centroid, size.width.toFloat(), size.height.toFloat(),
+                        minScale = fitScale * 0.6f, maxScale = fitScale * 7f
+                    )
+                    next = if (is3dView) {
+                        val spin = next.spinDeg + pan.x / density * 0.35f
+                        val tilt = (next.tiltDeg - pan.y / density * 0.3f).coerceIn(MapCameraMath.MIN_TILT, MapCameraMath.MAX_TILT)
+                        isoSpin = spin
+                        isoTilt = tilt
+                        next.copy(spinDeg = spin, tiltDeg = tilt)
+                    } else {
+                        next.copy(tx = next.tx + pan.x, ty = next.ty + pan.y)
+                    }
+                    camera = next
+                }
+            }
+            .pointerInput(selectedFloorLevel, sortedFloors) {
+                detectTapGestures { p ->
+                    val c = camera ?: return@detectTapGestures
+                    if (isTransitioning) return@detectTapGestures
+                    val pj = MapProjector(c, planW, planH, size.width.toFloat(), size.height.toFloat())
+                    if (selectedFloorLevel == null) {
+                        val hit = sortedFloors.asReversed().firstOrNull { f ->
+                            val v = floorVisuals[f.level] ?: return@firstOrNull false
+                            pointInPolygon(p, plateCorners(planW, planH).map { pj.project(it.x, it.y, v.z) })
                         }
+                        if (hit != null) latestOnSelectFloor(hit.level) else latestOnEmptyTap()
+                    } else {
+                        val floor = sortedFloors.firstOrNull { it.level == selectedFloorLevel }
+                        val world = pj.unproject(p.x, p.y)
+                        val room = if (floor != null && !floor.isTodo && world != null) {
+                            floor.rooms.lastOrNull { it.polygon.size >= 3 && pointInPolygon(world.x, world.y, it.polygon) }
+                        } else null
+                        if (room != null) latestOnRoomClick(room) else latestOnEmptyTap()
                     }
                 }
             }
             .testTag("hospital_map_canvas")
     ) {
-        val canvasWidth = constraints.maxWidth.toFloat()
-        val canvasHeight = constraints.maxHeight.toFloat()
-
         Canvas(modifier = Modifier.fillMaxSize()) {
-            // 1. Subtle Background Blueprint Grid
-            drawBlueprintGrid(canvasWidth, canvasHeight)
+            drawRect(MapCanvasBackground)
+            val cam = camera ?: return@Canvas
+            val pj = MapProjector(cam, planW, planH, size.width, size.height)
+            val oa = overlayAlpha.value
 
-            if (selectedFloorLevel == null) {
-                // 2. ISOMETRIC 3D MULTI-FLOOR VIEW (Tất cả)
-                drawIsometricBuildingMap(
-                    canvasWidth = canvasWidth,
-                    canvasHeight = canvasHeight,
-                    floors = floors.filter { !it.isTodo },
-                    currentRoute = currentRoute,
-                    startRoom = startRoom,
-                    destRoom = destRoom,
-                    language = language,
-                    zoom = zoomLevel,
-                    panX = panOffsetX,
-                    panY = panOffsetY,
-                    textMeasurer = textMeasurer,
-                    onSelectFloor = onSelectFloor
-                )
-            } else if (currentFloor != null && !currentFloor.isTodo) {
-                // 3. 2D POLYGON SINGLE FLOOR VIEW (Tầng 2 / Tầng 3)
-                drawPolygonFloorMap(
-                    canvasWidth = canvasWidth,
-                    canvasHeight = canvasHeight,
-                    floor = currentFloor,
-                    currentRoute = currentRoute,
-                    startRoom = startRoom,
-                    destRoom = destRoom,
-                    language = language,
-                    zoom = zoomLevel,
-                    panX = panOffsetX,
-                    panY = panOffsetY,
-                    textMeasurer = textMeasurer
+            for (floor in sortedFloors) {
+                val v = floorVisuals[floor.level] ?: continue
+                if (v.alpha < 0.01f) continue
+                drawFloor(
+                    floor = floor, vis = v, pj = pj, planW = planW, planH = planH,
+                    route = currentRoute, startRoom = startRoom, destRoom = destRoom, selectedRoom = selectedRoom,
+                    highlightPlate = is3dView && floor.level in routeLevels,
+                    showTodoText = is3dView && oa > 0f, textMeasurer = textMeasurer, language = language, textAlpha = oa
                 )
             }
-        }
 
-        // Floating Map Controls on Right (Zoom in, Zoom out, Reset view)
-        Column(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            MapControlButton(
-                icon = Icons.Default.Navigation,
-                contentDescription = "Reset View",
-                onClick = onResetView,
-                testTag = "btn_reset_view"
-            )
-            MapControlButton(
-                icon = Icons.Default.Add,
-                contentDescription = "Zoom In",
-                onClick = onZoomIn,
-                testTag = "btn_zoom_in"
-            )
-            MapControlButton(
-                icon = Icons.Default.Remove,
-                contentDescription = "Zoom Out",
-                onClick = onZoomOut,
-                testTag = "btn_zoom_out"
-            )
-        }
-
-        // View Mode Badge at top right
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 180.dp, end = 14.dp)
-                .shadow(2.dp, RoundedCornerShape(12.dp)),
-            shape = RoundedCornerShape(12.dp),
-            color = Color.White.copy(alpha = 0.94f)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = if (selectedFloorLevel == null) Icons.Default.Layers else Icons.Default.Map,
-                    contentDescription = null,
-                    tint = Color(0xFF0077D7),
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = if (selectedFloorLevel == null) {
-                        if (language == AppLanguage.VIETNAMESE) "3D Isometric" else "3D Isometric"
-                    } else {
-                        HospitalLocalization.getFloorLabel(selectedFloorLevel, language)
-                    },
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF0F172A)
-                )
-            }
-        }
-
-        // Gesture Drag Hint Badge at bottom right
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 14.dp, bottom = 12.dp)
-                .shadow(2.dp, RoundedCornerShape(12.dp)),
-            shape = RoundedCornerShape(12.dp),
-            color = Color.White.copy(alpha = 0.94f)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.TouchApp,
-                    contentDescription = null,
-                    tint = Color(0xFF0077D7),
-                    modifier = Modifier.size(15.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = if (language == AppLanguage.VIETNAMESE) "Chạm phòng • Kéo di chuyển" else "Tap room • Drag to pan",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF334155)
-                )
-            }
-        }
-    }
-}
-
-// -----------------------------------------------------------------------------
-// 1. FLOOR 1 TODO PLACEHOLDER
-// -----------------------------------------------------------------------------
-
-@Composable
-private fun FloorTodoPlaceholder(
-    floorLevel: Int,
-    language: AppLanguage,
-    onSelectFloor: (Int?) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color(0xFFF8FAFC))
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Card(
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Surface(
-                    shape = CircleShape,
-                    color = Color(0xFFFFF3E0),
-                    modifier = Modifier.size(64.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Construction,
-                            contentDescription = null,
-                            tint = Color(0xFFF57C00),
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
+            if (oa > 0f) {
+                if (is3dView) {
+                    drawShaftLinks(shafts, floorVisuals, pj, oa)
+                    drawTransferLink(currentRoute, floorVisuals, pj, oa)
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text(
-                    text = HospitalLocalization.getFloorLabel(floorLevel, language).uppercase(),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF1E293B)
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = if (language == AppLanguage.VIETNAMESE) "TODO: Đang hoàn thiện sơ đồ tầng này" else "TODO: Floor map under construction",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFFF57C00),
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Text(
-                    text = if (language == AppLanguage.VIETNAMESE)
-                        "Sơ đồ Tầng 1 đã chuyển về trạng thái TODO theo yêu cầu. Hiện tại hệ thống hỗ trợ đầy đủ sơ đồ đa giác Tầng 2, Tầng 3 và chế độ xem 3D Isometric."
-                    else
-                        "Floor 1 is currently in TODO status. The app supports full polygon maps for Floor 2, Floor 3, and 3D Isometric view.",
-                    fontSize = 13.sp,
-                    color = Color(0xFF64748B),
-                    textAlign = TextAlign.Center,
-                    lineHeight = 18.sp
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Action buttons to go to Floor 2, Floor 3, or 3D view
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { onSelectFloor(2) },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0077D7)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            text = if (language == AppLanguage.VIETNAMESE) "Xem Tầng 2" else "Floor 2",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Button(
-                        onClick = { onSelectFloor(3) },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            text = if (language == AppLanguage.VIETNAMESE) "Xem Tầng 3" else "Floor 3",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    OutlinedButton(
-                        onClick = { onSelectFloor(null) },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            text = "3D Iso",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF0077D7)
-                        )
+                drawRoutePins(currentRoute, floorVisuals, pj, oa, elevatorPainter, stairsPainter)
+                if (is3dView) {
+                    drawFloorTags(sortedFloors, floorVisuals, routeLevels, pj, planW, planH, textMeasurer, language, oa)
+                } else {
+                    val floor = sortedFloors.firstOrNull { it.level == selectedFloorLevel }
+                    if (floor != null && !floor.isTodo) {
+                        drawRoomLabels(floor, labelTexts, pj, fitScale, textMeasurer, language, oa)
                     }
                 }
             }
@@ -397,642 +264,340 @@ private fun FloorTodoPlaceholder(
 }
 
 // -----------------------------------------------------------------------------
-// 2. 2D POLYGON SINGLE FLOOR RENDERING (Tầng 2 & Tầng 3)
+// Floors
 // -----------------------------------------------------------------------------
 
-private fun DrawScope.drawPolygonFloorMap(
-    canvasWidth: Float,
-    canvasHeight: Float,
+private fun plateCorners(planW: Float, planH: Float): List<Point2D> {
+    val p = MapCameraMath.SLAB_PAD
+    return listOf(Point2D(-p, -p), Point2D(planW + p, -p), Point2D(planW + p, planH + p), Point2D(-p, planH + p))
+}
+
+private fun polyPath(points: List<Point2D>, pj: MapProjector, z: Float): Path = Path().apply {
+    points.forEachIndexed { i, pt ->
+        val o = pj.project(pt.x, pt.y, z)
+        if (i == 0) moveTo(o.x, o.y) else lineTo(o.x, o.y)
+    }
+    close()
+}
+
+private fun DrawScope.drawFloor(
     floor: Floor,
-    currentRoute: HospitalRoute?,
+    vis: FloorVisual,
+    pj: MapProjector,
+    planW: Float,
+    planH: Float,
+    route: HospitalRoute?,
     startRoom: Room?,
     destRoom: Room?,
-    language: AppLanguage,
-    zoom: Float,
-    panX: Float,
-    panY: Float,
-    textMeasurer: TextMeasurer
-) {
-    val fw = floor.width.coerceAtLeast(100f)
-    val fh = floor.height.coerceAtLeast(100f)
-    val scale = min((canvasWidth - 32f) / fw, (canvasHeight - 180f) / fh) * zoom
-    val originX = (canvasWidth - fw * scale) / 2f + panX
-    val originY = (canvasHeight - fh * scale) / 2f + 30f + panY
-
-    fun toCanvas(px: Float, py: Float): Offset {
-        return Offset(originX + px * scale, originY + py * scale)
-    }
-
-    // 1. Floor Base Slab / Architectural Card
-    drawRoundRect(
-        color = Color(0x18000000),
-        topLeft = Offset(originX + 4f, originY + 8f),
-        size = Size(fw * scale, fh * scale),
-        cornerRadius = CornerRadius(16f, 16f)
-    )
-    drawRoundRect(
-        color = Color(0xFFFCFDFE),
-        topLeft = Offset(originX, originY),
-        size = Size(fw * scale, fh * scale),
-        cornerRadius = CornerRadius(16f, 16f)
-    )
-    drawRoundRect(
-        color = Color(0xFFCBD5E1),
-        topLeft = Offset(originX, originY),
-        size = Size(fw * scale, fh * scale),
-        cornerRadius = CornerRadius(16f, 16f),
-        style = Stroke(2.0f)
-    )
-
-    // 2. Building Brand and Floor Title Header
-    val brandName = if (language == AppLanguage.VIETNAMESE) "Bệnh viện Đa khoa Hoàn Mỹ" else "Hoan My General Hospital"
-    val brandText = textMeasurer.measure(
-        text = AnnotatedString(brandName),
-        style = TextStyle(color = Color(0xFF00756A), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-    )
-    drawCircle(
-        color = Color(0xFF00756A),
-        radius = 5f,
-        center = Offset(originX + 16f, originY + 16f)
-    )
-    drawText(textLayoutResult = brandText, topLeft = Offset(originX + 26f, originY + 8f))
-
-    val floorLabel = HospitalLocalization.getFloorLabel(floor.level, language).uppercase()
-    val floorText = textMeasurer.measure(
-        text = AnnotatedString(floorLabel),
-        style = TextStyle(color = Color(0xFF0F172A), fontSize = 13.sp, fontWeight = FontWeight.Black)
-    )
-    drawText(textLayoutResult = floorText, topLeft = Offset(originX + fw * scale - floorText.size.width - 16f, originY + 8f))
-
-    // 3. Render all Polygon Rooms
-    for (room in floor.rooms) {
-        val poly = room.polygon
-        if (poly.isEmpty()) continue
-
-        val path = Path().apply {
-            val first = toCanvas(poly[0].x, poly[0].y)
-            moveTo(first.x, first.y)
-            for (i in 1 until poly.size) {
-                val pt = toCanvas(poly[i].x, poly[i].y)
-                lineTo(pt.x, pt.y)
-            }
-            close()
-        }
-
-        // Room Background Color
-        val roomBgColor = try {
-            Color(android.graphics.Color.parseColor(room.colorHex))
-        } catch (_: Exception) {
-            Color(0xFFCFE0E8)
-        }
-        drawPath(path, roomBgColor)
-
-        // Room Border
-        val isStart = room.id == startRoom?.id
-        val isDest = room.id == destRoom?.id
-
-        if (isDest) {
-            // Glowing Destination Outline
-            drawPath(path, Color(0x66EF4444), style = Stroke(width = 6f * zoom.coerceIn(0.8f, 1.5f)))
-            drawPath(path, Color(0xFFEF4444), style = Stroke(width = 3.5f))
-        } else if (isStart) {
-            // Glowing Start Outline
-            drawPath(path, Color(0x6610B981), style = Stroke(width = 6f * zoom.coerceIn(0.8f, 1.5f)))
-            drawPath(path, Color(0xFF10B981), style = Stroke(width = 3.5f))
-        } else {
-            // Normal Room Border
-            drawPath(path, Color.White.copy(alpha = 0.65f), style = Stroke(width = 1.2f))
-        }
-
-        // Room Label & Badge
-        val labelCenter = room.labelAt ?: Point2D(
-            poly.map { it.x }.average().toFloat(),
-            poly.map { it.y }.average().toFloat()
-        )
-        val canvasLabelPos = toCanvas(labelCenter.x, labelCenter.y)
-
-        // Stair or Elevator Icon / Badge
-        if (room.kind == "elevator") {
-            drawCircle(Color(0xFF2E7D32), radius = 8f * zoom.coerceIn(0.8f, 1.4f), center = canvasLabelPos)
-            val elevText = textMeasurer.measure(
-                text = AnnotatedString("EV"),
-                style = TextStyle(color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-            )
-            drawText(elevText, topLeft = Offset(canvasLabelPos.x - elevText.size.width / 2f, canvasLabelPos.y - elevText.size.height / 2f))
-        } else if (room.kind == "stair") {
-            drawCircle(Color(0xFFE65100), radius = 8f * zoom.coerceIn(0.8f, 1.4f), center = canvasLabelPos)
-            val stairText = textMeasurer.measure(
-                text = AnnotatedString("ST"),
-                style = TextStyle(color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-            )
-            drawText(stairText, topLeft = Offset(canvasLabelPos.x - stairText.size.width / 2f, canvasLabelPos.y - stairText.size.height / 2f))
-        } else {
-            // Normal Room Name
-            val displayName = if (language == AppLanguage.ENGLISH && room.nameEn.isNotEmpty()) {
-                room.nameEn
-            } else {
-                room.name
-            }
-
-            if (displayName.isNotBlank() && zoom >= 0.7f) {
-                val textColor = try {
-                    Color(android.graphics.Color.parseColor(room.textColorHex))
-                } catch (_: Exception) {
-                    Color(0xFF222222)
-                }
-
-                val fontSize = (if (displayName.length > 15) 7.5f else 8.5f) * zoom.coerceIn(0.8f, 1.3f)
-                val roomTextResult = textMeasurer.measure(
-                    text = AnnotatedString(displayName),
-                    style = TextStyle(
-                        color = textColor,
-                        fontSize = fontSize.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        textAlign = TextAlign.Center
-                    )
-                )
-
-                // Only draw if label fits reasonably
-                val rx = canvasLabelPos.x - roomTextResult.size.width / 2f
-                val ry = canvasLabelPos.y - roomTextResult.size.height / 2f
-                drawText(roomTextResult, topLeft = Offset(rx, ry))
-            }
-        }
-
-        // Draw Start Pin Badge
-        if (isStart) {
-            drawCircle(Color(0xFF10B981), radius = 10f, center = Offset(canvasLabelPos.x, canvasLabelPos.y - 14f))
-            drawCircle(Color.White, radius = 5f, center = Offset(canvasLabelPos.x, canvasLabelPos.y - 14f))
-        }
-
-        // Draw Destination Pin Badge
-        if (isDest) {
-            drawCircle(Color(0xFFEF4444), radius = 10f, center = Offset(canvasLabelPos.x, canvasLabelPos.y - 14f))
-            drawCircle(Color.White, radius = 5f, center = Offset(canvasLabelPos.x, canvasLabelPos.y - 14f))
-        }
-    }
-
-    // 4. Draw Section Labels from Floor JSON
-    for (flLabel in floor.labels) {
-        val labelPos = toCanvas(flLabel.x, flLabel.y)
-        val textStr = if (language == AppLanguage.ENGLISH && flLabel.nameEn.isNotEmpty()) flLabel.nameEn else flLabel.name
-        val meas = textMeasurer.measure(
-            text = AnnotatedString(textStr),
-            style = TextStyle(
-                color = Color(0xFF1E3A8A),
-                fontSize = 9.sp * zoom.coerceIn(0.8f, 1.2f),
-                fontWeight = FontWeight.Bold
-            )
-        )
-        // Background pill
-        val pillPadding = 4f
-        drawRoundRect(
-            color = Color.White.copy(alpha = 0.85f),
-            topLeft = Offset(labelPos.x - pillPadding, labelPos.y - pillPadding),
-            size = Size(meas.size.width + pillPadding * 2, meas.size.height + pillPadding * 2),
-            cornerRadius = CornerRadius(6f, 6f)
-        )
-        drawText(meas, topLeft = labelPos)
-    }
-
-    // 5. Draw Navigation Path
-    if (currentRoute != null) {
-        val floorSegments = currentRoute.segments.filter { it.floorLevel == floor.level }
-        for (seg in floorSegments) {
-            if (seg.points.size >= 2) {
-                val routePath = Path()
-                val first = toCanvas(seg.points[0].x, seg.points[0].y)
-                routePath.moveTo(first.x, first.y)
-                for (i in 1 until seg.points.size) {
-                    val p = toCanvas(seg.points[i].x, seg.points[i].y)
-                    routePath.lineTo(p.x, p.y)
-                }
-
-                // Outer cyan glow
-                drawPath(
-                    path = routePath,
-                    color = Color(0x660077D7),
-                    style = Stroke(width = 8f * zoom.coerceIn(0.8f, 1.5f), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
-                // Main route line
-                drawPath(
-                    path = routePath,
-                    color = Color(0xFF0077D7),
-                    style = Stroke(width = 4f * zoom.coerceIn(0.8f, 1.5f), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
-
-                // Draw dots along waypoints
-                for (p in seg.points) {
-                    val cp = toCanvas(p.x, p.y)
-                    drawCircle(Color.White, radius = 3.5f, center = cp)
-                    drawCircle(Color(0xFF0077D7), radius = 2f, center = cp)
-                }
-            }
-        }
-    }
-
-    // 6. Legend Box at Bottom Right
-    drawLegendBox(originX + fw * scale - 180f, originY + fh * scale - 70f, language, textMeasurer)
-}
-
-// -----------------------------------------------------------------------------
-// 3. 3D ISOMETRIC MULTI-FLOOR VIEW (Tất cả / All)
-// -----------------------------------------------------------------------------
-
-private fun DrawScope.drawIsometricBuildingMap(
-    canvasWidth: Float,
-    canvasHeight: Float,
-    floors: List<Floor>,
-    currentRoute: HospitalRoute?,
-    startRoom: Room?,
-    destRoom: Room?,
-    language: AppLanguage,
-    zoom: Float,
-    panX: Float,
-    panY: Float,
+    selectedRoom: Room?,
+    highlightPlate: Boolean,
+    showTodoText: Boolean,
     textMeasurer: TextMeasurer,
-    onSelectFloor: (Int?) -> Unit
+    language: AppLanguage,
+    textAlpha: Float
 ) {
-    val activeFloors = floors.filter { !it.isTodo }.sortedBy { it.level } // Floor 2 then Floor 3
-    if (activeFloors.isEmpty()) return
+    val a = vis.alpha
+    val z = vis.z
+    val corners = plateCorners(planW, planH)
+    val plate = polyPath(corners, pj, z)
 
-    val baseScale = computeIsoScale(canvasWidth, canvasHeight, zoom)
-    val elevation = 240f * zoom
-
-    fun project(fx: Float, fy: Float, level: Int): Offset {
-        return projectIso(fx, fy, level, canvasWidth, canvasHeight, baseScale, elevation, panX, panY)
+    if (floor.isTodo) {
+        drawPath(plate, Color.White.copy(alpha = 0.45f), alpha = a)
+        drawPath(
+            plate, MapInkSubtle, alpha = a,
+            style = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 7.dp.toPx())))
+        )
+        if (showTodoText) {
+            val c = pj.project(planW / 2f, planH / 2f, z)
+            val text = "${HospitalLocalization.getFloorLabel(floor.level, language)} — " +
+                HospitalLocalization.t(language, "chưa có sơ đồ", "no map yet")
+            val layout = textMeasurer.measure(text, TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MapInkMuted))
+            drawText(layout, topLeft = Offset(c.x - layout.size.width / 2f, c.y - layout.size.height / 2f), alpha = a * textAlpha)
+        }
+        return
     }
 
-    // 1. Draw Connecting Shafts between Floor 2 and Floor 3 (Stairs & Elevators)
-    val f2 = activeFloors.find { it.level == 2 }
-    val f3 = activeFloors.find { it.level == 3 }
-    if (f2 != null && f3 != null) {
-        val f2Shafts = f2.rooms.filter { it.link != null }.associateBy { it.link!! }
-        val f3Shafts = f3.rooms.filter { it.link != null }.associateBy { it.link!! }
-        val common = f2Shafts.keys.intersect(f3Shafts.keys)
+    // 3D slab thickness (only visible while tilted)
+    if (pj.cam.tiltDeg > 0.5f) drawPath(polyPath(corners, pj, z - MapCameraMath.SLAB_THICKNESS), MapSlabSide, alpha = a)
+    drawPath(plate, Color.White, alpha = a)
+    drawPath(
+        plate, if (highlightPlate) MapBluePrimary else MapPlateStroke, alpha = a,
+        style = Stroke(width = if (highlightPlate) 2.dp.toPx() else 1.dp.toPx())
+    )
 
-        for (link in common) {
-            val r2 = f2Shafts[link]!!
-            val r3 = f3Shafts[link]!!
-
-            val c2 = r2.labelAt ?: Point2D(r2.polygon.map { it.x }.average().toFloat(), r2.polygon.map { it.y }.average().toFloat())
-            val c3 = r3.labelAt ?: Point2D(r3.polygon.map { it.x }.average().toFloat(), r3.polygon.map { it.y }.average().toFloat())
-
-            val p2 = project(c2.x, c2.y, 2)
-            val p3 = project(c3.x, c3.y, 3)
-
-            // Shaft vertical dashed pillar
-            val shaftColor = if (r2.kind == "elevator") Color(0x8800B4D8) else Color(0x88FB8500)
-            val dash = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
-            drawLine(
-                color = shaftColor,
-                start = p2,
-                end = p3,
-                strokeWidth = 2.5f,
-                pathEffect = dash
-            )
+    val roomStroke = (2.5f * pj.cam.scale).coerceIn(0.5f, 3f)
+    val highlighted = ArrayList<Pair<Path, Color>>(3)
+    for (room in floor.rooms) {
+        if (room.polygon.size < 3) continue
+        val path = polyPath(room.polygon, pj, z)
+        drawPath(path, cachedColor(room.colorHex, Color(0xFFCFE0E8)), alpha = a)
+        val hc = when (room.id) {
+            selectedRoom?.id -> MapBluePrimary
+            destRoom?.id -> MapRedAlert
+            startRoom?.id -> MapGreenSuccess
+            else -> null
         }
+        if (hc != null) highlighted += path to hc
+        else drawPath(path, Color.White, alpha = a, style = Stroke(width = roomStroke, join = StrokeJoin.Round))
+    }
+    highlighted.forEach { (path, color) ->
+        drawPath(path, color, alpha = a, style = Stroke(width = 3.dp.toPx(), join = StrokeJoin.Round))
     }
 
-    // 2. Render Floors from bottom to top (Floor 2, then Floor 3)
-    for (fl in activeFloors) {
-        val fw = fl.width
-        val fh = fl.height
-
-        // 3D Slab Thickness Extrusion
-        val slabCorners = listOf(
-            project(0f, 0f, fl.level),
-            project(fw, 0f, fl.level),
-            project(fw, fh, fl.level),
-            project(0f, fh, fl.level)
-        )
-
-        // Drop shadow under slab
-        val shadowPath = Path().apply {
-            moveTo(slabCorners[0].x, slabCorners[0].y + 16f)
-            for (i in 1..3) lineTo(slabCorners[i].x, slabCorners[i].y + 16f)
-            close()
+    route?.segments?.filter { it.floorLevel == floor.level && it.points.size >= 2 }?.forEach { seg ->
+        val path = Path()
+        seg.points.forEachIndexed { i, pt ->
+            val o = pj.project(pt.x, pt.y, z)
+            if (i == 0) path.moveTo(o.x, o.y) else path.lineTo(o.x, o.y)
         }
-        drawPath(shadowPath, Color(0x18000000))
-
-        // Side walls (3D thickness: 12px)
-        val sideThickness = 12f
-        val frontWall = Path().apply {
-            moveTo(slabCorners[3].x, slabCorners[3].y)
-            lineTo(slabCorners[2].x, slabCorners[2].y)
-            lineTo(slabCorners[2].x, slabCorners[2].y + sideThickness)
-            lineTo(slabCorners[3].x, slabCorners[3].y + sideThickness)
-            close()
-        }
-        drawPath(frontWall, Color(0xFFCBD5E1))
-
-        val rightWall = Path().apply {
-            moveTo(slabCorners[2].x, slabCorners[2].y)
-            lineTo(slabCorners[1].x, slabCorners[1].y)
-            lineTo(slabCorners[1].x, slabCorners[1].y + sideThickness)
-            lineTo(slabCorners[2].x, slabCorners[2].y + sideThickness)
-            close()
-        }
-        drawPath(rightWall, Color(0xFF94A3B8))
-
-        // Slab Top Face
-        val topSlab = Path().apply {
-            moveTo(slabCorners[0].x, slabCorners[0].y)
-            for (i in 1..3) lineTo(slabCorners[i].x, slabCorners[i].y)
-            close()
-        }
-        drawPath(topSlab, Color(0xFFF8FAFC))
-        drawPath(topSlab, Color(0xFFCBD5E1), style = Stroke(width = 1.5f))
-
-        // Floating Isometric Floor Tag Badge
-        val floorTagPos = slabCorners[0]
-        val floorTitle = HospitalLocalization.getFloorLabel(fl.level, language).uppercase()
-        val tagResult = textMeasurer.measure(
-            text = AnnotatedString("$floorTitle (${fl.rooms.size} phòng)"),
-            style = TextStyle(color = Color(0xFF0077D7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        )
-        drawRoundRect(
-            color = Color.White.copy(alpha = 0.92f),
-            topLeft = Offset(floorTagPos.x - 120f, floorTagPos.y - 12f),
-            size = Size(tagResult.size.width + 16f, tagResult.size.height + 10f),
-            cornerRadius = CornerRadius(8f, 8f)
-        )
-        drawRoundRect(
-            color = Color(0xFF0077D7),
-            topLeft = Offset(floorTagPos.x - 120f, floorTagPos.y - 12f),
-            size = Size(tagResult.size.width + 16f, tagResult.size.height + 10f),
-            cornerRadius = CornerRadius(8f, 8f),
-            style = Stroke(1.2f)
-        )
-        drawText(tagResult, topLeft = Offset(floorTagPos.x - 112f, floorTagPos.y - 7f))
-
-        // Render Rooms in Isometric
-        for (room in fl.rooms) {
-            val poly = room.polygon
-            if (poly.isEmpty()) continue
-
-            val isoPath = Path().apply {
-                val first = project(poly[0].x, poly[0].y, fl.level)
-                moveTo(first.x, first.y)
-                for (i in 1 until poly.size) {
-                    val p = project(poly[i].x, poly[i].y, fl.level)
-                    lineTo(p.x, p.y)
-                }
-                close()
-            }
-
-            val roomBgColor = try {
-                Color(android.graphics.Color.parseColor(room.colorHex))
-            } catch (_: Exception) {
-                Color(0xFFCFE0E8)
-            }
-            drawPath(isoPath, roomBgColor)
-
-            val isStart = room.id == startRoom?.id
-            val isDest = room.id == destRoom?.id
-
-            if (isDest) {
-                drawPath(isoPath, Color(0x66EF4444), style = Stroke(width = 6f))
-                drawPath(isoPath, Color(0xFFEF4444), style = Stroke(width = 3.5f))
-            } else if (isStart) {
-                drawPath(isoPath, Color(0x6610B981), style = Stroke(width = 6f))
-                drawPath(isoPath, Color(0xFF10B981), style = Stroke(width = 3.5f))
-            } else {
-                drawPath(isoPath, Color.White.copy(alpha = 0.55f), style = Stroke(width = 1f))
-            }
-
-            // Room Centroid for label
-            val c = room.labelAt ?: Point2D(poly.map { it.x }.average().toFloat(), poly.map { it.y }.average().toFloat())
-            val isoCenter = project(c.x, c.y, fl.level)
-
-            if (room.kind == "elevator") {
-                drawCircle(Color(0xFF2E7D32), radius = 6f * zoom.coerceIn(0.7f, 1.3f), center = isoCenter)
-            } else if (room.kind == "stair") {
-                drawCircle(Color(0xFFE65100), radius = 6f * zoom.coerceIn(0.7f, 1.3f), center = isoCenter)
-            } else if (zoom >= 0.9f && (room.name.isNotBlank() || room.nameEn.isNotBlank())) {
-                val name = if (language == AppLanguage.ENGLISH && room.nameEn.isNotEmpty()) room.nameEn else room.name
-                val textColor = try {
-                    Color(android.graphics.Color.parseColor(room.textColorHex))
-                } catch (_: Exception) {
-                    Color(0xFF222222)
-                }
-                val meas = textMeasurer.measure(
-                    text = AnnotatedString(name.take(12)),
-                    style = TextStyle(color = textColor, fontSize = 7.sp, fontWeight = FontWeight.Bold)
-                )
-                drawText(meas, topLeft = Offset(isoCenter.x - meas.size.width / 2f, isoCenter.y - meas.size.height / 2f))
-            }
-
-            if (isStart) {
-                drawCircle(Color(0xFF10B981), radius = 8f, center = Offset(isoCenter.x, isoCenter.y - 12f))
-                drawCircle(Color.White, radius = 4f, center = Offset(isoCenter.x, isoCenter.y - 12f))
-            }
-            if (isDest) {
-                drawCircle(Color(0xFFEF4444), radius = 8f, center = Offset(isoCenter.x, isoCenter.y - 12f))
-                drawCircle(Color.White, radius = 4f, center = Offset(isoCenter.x, isoCenter.y - 12f))
-            }
-        }
-    }
-
-    // 3. Draw 3D Multi-Floor Route
-    if (currentRoute != null) {
-        // Draw segments on each floor
-        for (seg in currentRoute.segments) {
-            if (seg.points.size >= 2) {
-                val isoRoute = Path()
-                val first = project(seg.points[0].x, seg.points[0].y, seg.floorLevel)
-                isoRoute.moveTo(first.x, first.y)
-                for (i in 1 until seg.points.size) {
-                    val p = project(seg.points[i].x, seg.points[i].y, seg.floorLevel)
-                    isoRoute.lineTo(p.x, p.y)
-                }
-
-                drawPath(isoRoute, Color(0x660077D7), style = Stroke(width = 8f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-                drawPath(isoRoute, Color(0xFF0077D7), style = Stroke(width = 4f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            }
-        }
-
-        // If transfer exists, draw vertical climbing laser line between floors
-        currentRoute.transfer?.let { transfer ->
-            val pA = transfer.roomA.labelAt ?: Point2D(transfer.roomA.polygon.map { it.x }.average().toFloat(), transfer.roomA.polygon.map { it.y }.average().toFloat())
-            val pB = transfer.roomB.labelAt ?: Point2D(transfer.roomB.polygon.map { it.x }.average().toFloat(), transfer.roomB.polygon.map { it.y }.average().toFloat())
-
-            val isoA = project(pA.x, pA.y, transfer.roomA.floorLevel)
-            val isoB = project(pB.x, pB.y, transfer.roomB.floorLevel)
-
-            drawLine(
-                color = Color(0xFF00F5D4),
-                start = isoA,
-                end = isoB,
-                strokeWidth = 5f,
-                cap = StrokeCap.Round
-            )
-            drawLine(
-                color = Color(0xFF0077D7),
-                start = isoA,
-                end = isoB,
-                strokeWidth = 3f,
-                cap = StrokeCap.Round
-            )
-        }
+        drawPath(path, Color.White, alpha = a, style = Stroke(7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(path, MapBluePrimary, alpha = a, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
 
 // -----------------------------------------------------------------------------
-// HELPER MATH & PROJECTION
+// 3D-only overlays
 // -----------------------------------------------------------------------------
 
-private fun computeIsoScale(canvasWidth: Float, canvasHeight: Float, zoom: Float): Float {
-    val fw = 1795f
-    val fh = 734f
-    val cosA = 0.866f
-    val sinA = 0.500f
-    val spanX = (fw + fh) * cosA * 0.5f
-    val spanY = (fw + fh) * sinA * 0.45f + 260f
-    return min((canvasWidth - 60f) / spanX, (canvasHeight - 160f) / spanY) * 0.95f * zoom
+private class ShaftLink(val lowLevel: Int, val highLevel: Int, val low: Room, val high: Room)
+
+private fun connectingShafts(sorted: List<Floor>): List<ShaftLink> {
+    val out = mutableListOf<ShaftLink>()
+    for (i in 0 until sorted.size - 1) {
+        val lo = sorted[i]; val hi = sorted[i + 1]
+        if (lo.isTodo || hi.isTodo) continue
+        val a = lo.rooms.filter { it.link != null }.associateBy { it.link!! }
+        val b = hi.rooms.filter { it.link != null }.associateBy { it.link!! }
+        a.keys.intersect(b.keys).forEach { k -> out += ShaftLink(lo.level, hi.level, a.getValue(k), b.getValue(k)) }
+    }
+    return out
 }
 
-private fun projectIso(
-    fx: Float,
-    fy: Float,
-    level: Int,
-    canvasWidth: Float,
-    canvasHeight: Float,
-    scale: Float,
-    elevation: Float,
-    panX: Float,
-    panY: Float
-): Offset {
-    val fw = 1795f
-    val fh = 734f
-    val cosA = 0.866f
-    val sinA = 0.500f
+private fun roomCenter(room: Room): Point2D = room.labelAt ?: Point2D(
+    room.polygon.map { it.x }.average().toFloat(),
+    room.polygon.map { it.y }.average().toFloat()
+)
 
-    val u = (fx - fw / 2f) * scale
-    val v = (fy - fh / 2f) * scale
-
-    val sx = canvasWidth / 2f + (u - v) * cosA + panX
-    val sy = canvasHeight / 2f + 40f + (u + v) * sinA * 0.55f - (level - 2) * elevation + panY
-    return Offset(sx, sy)
+private fun DrawScope.drawShaftLinks(links: List<ShaftLink>, vis: Map<Int, FloorVisual>, pj: MapProjector, alpha: Float) {
+    val dash = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
+    for (l in links) {
+        val vl = vis[l.lowLevel] ?: continue
+        val vh = vis[l.highLevel] ?: continue
+        val cl = roomCenter(l.low); val ch = roomCenter(l.high)
+        drawLine(
+            color = if (l.low.kind == "elevator") MapElevatorGreen else MapAmber,
+            start = pj.project(cl.x, cl.y, vl.z), end = pj.project(ch.x, ch.y, vh.z),
+            strokeWidth = 1.5.dp.toPx(), pathEffect = dash, alpha = 0.7f * alpha * min(vl.alpha, vh.alpha)
+        )
+    }
 }
+
+private fun DrawScope.drawTransferLink(route: HospitalRoute?, vis: Map<Int, FloorVisual>, pj: MapProjector, alpha: Float) {
+    val t = route?.transfer ?: return
+    val va = vis[t.roomA.floorLevel] ?: return
+    val vb = vis[t.roomB.floorLevel] ?: return
+    val ca = roomCenter(t.roomA); val cb = roomCenter(t.roomB)
+    val a = pj.project(ca.x, ca.y, va.z); val b = pj.project(cb.x, cb.y, vb.z)
+    drawLine(Color.White, a, b, strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round, alpha = alpha)
+    drawLine(MapBluePrimary, a, b, strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round, alpha = alpha)
+}
+
+private fun DrawScope.drawFloorTags(
+    floors: List<Floor>,
+    vis: Map<Int, FloorVisual>,
+    routeLevels: Set<Int>,
+    pj: MapProjector,
+    planW: Float,
+    planH: Float,
+    tm: TextMeasurer,
+    language: AppLanguage,
+    alpha: Float
+) {
+    for (f in floors) {
+        val v = vis[f.level] ?: continue
+        if (v.alpha < 0.5f) continue
+        val left = plateCorners(planW, planH).map { pj.project(it.x, it.y, v.z) }.minByOrNull { it.x } ?: continue
+        val onRoute = f.level in routeLevels
+        val label = if (f.isTodo) HospitalLocalization.t(language, "Chưa có sơ đồ", "No map yet")
+        else HospitalLocalization.t(language, "${f.rooms.size} phòng", "${f.rooms.size} rooms")
+        val textLayout = tm.measure(label, TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium, color = if (f.isTodo) MapInkMuted else MapInk))
+        val numLayout = tm.measure("${f.level}", TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (onRoute) Color.White else MapInk))
+        val h = 28.dp.toPx(); val badge = 20.dp.toPx(); val padL = 4.dp.toPx(); val gap = 6.dp.toPx(); val padR = 10.dp.toPx()
+        val w = padL + badge + gap + textLayout.size.width + padR
+        val x = max(8.dp.toPx(), left.x - 4.dp.toPx())
+        val y = left.y - 10.dp.toPx() - h
+        drawRoundRect(Color.Black.copy(alpha = 0.12f), Offset(x, y + 1.dp.toPx()), Size(w, h), androidx.compose.ui.geometry.CornerRadius(h / 2f), alpha = alpha)
+        drawRoundRect(Color.White, Offset(x, y), Size(w, h), androidx.compose.ui.geometry.CornerRadius(h / 2f), alpha = alpha)
+        if (onRoute) drawRoundRect(MapBluePrimary, Offset(x, y), Size(w, h), androidx.compose.ui.geometry.CornerRadius(h / 2f), style = Stroke(1.5.dp.toPx()), alpha = alpha)
+        val bc = Offset(x + padL + badge / 2f, y + h / 2f)
+        drawCircle(if (onRoute) MapBluePrimary else Color(0xFFE8EAED), badge / 2f, bc, alpha = alpha)
+        drawText(numLayout, topLeft = Offset(bc.x - numLayout.size.width / 2f, bc.y - numLayout.size.height / 2f), alpha = alpha)
+        drawText(textLayout, topLeft = Offset(x + padL + badge + gap, y + (h - textLayout.size.height) / 2f), alpha = alpha)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Pins (both views)
+// -----------------------------------------------------------------------------
+
+private fun DrawScope.drawRoutePins(
+    route: HospitalRoute?,
+    vis: Map<Int, FloorVisual>,
+    pj: MapProjector,
+    alpha: Float,
+    elevatorPainter: VectorPainter,
+    stairsPainter: VectorPainter
+) {
+    val r = route ?: return
+    val first = r.segments.firstOrNull() ?: return
+    val last = r.segments.last()
+    fun visible(level: Int) = (vis[level]?.alpha ?: 0f) > 0.5f
+    fun z(level: Int) = vis[level]?.z ?: 0f
+
+    r.transfer?.let { t ->
+        val painter = if (t.kind == "elevator") elevatorPainter else stairsPainter
+        listOf(t.roomA, t.roomB).forEach { room ->
+            if (!visible(room.floorLevel)) return@forEach
+            val c = roomCenter(room)
+            val o = pj.project(c.x, c.y, z(room.floorLevel))
+            drawCircle(Color.White, 13.dp.toPx(), o, alpha = alpha)
+            drawCircle(MapBluePrimary, 13.dp.toPx(), o, style = Stroke(2.dp.toPx()), alpha = alpha)
+            val s = 16.dp.toPx()
+            translate(o.x - s / 2f, o.y - s / 2f) {
+                with(painter) { draw(Size(s, s), alpha = alpha, colorFilter = ColorFilter.tint(MapBluePrimary)) }
+            }
+        }
+    }
+    if (visible(first.floorLevel) && first.points.isNotEmpty()) {
+        val p = first.points.first()
+        val o = pj.project(p.x, p.y, z(first.floorLevel))
+        drawCircle(Color.Black.copy(alpha = 0.18f), 10.dp.toPx(), o + Offset(0f, 1.dp.toPx()), alpha = alpha)
+        drawCircle(Color.White, 9.dp.toPx(), o, alpha = alpha)
+        drawCircle(MapGreenSuccess, 6.dp.toPx(), o, alpha = alpha)
+    }
+    if (visible(last.floorLevel) && last.points.isNotEmpty()) {
+        val p = last.points.last()
+        val o = pj.project(p.x, p.y, z(last.floorLevel))
+        val rr = 10.dp.toPx()
+        val head = Offset(o.x, o.y - 22.dp.toPx())
+        val tail = Path().apply {
+            moveTo(head.x - rr * 0.8f, head.y + rr * 0.55f)
+            lineTo(o.x, o.y)
+            lineTo(head.x + rr * 0.8f, head.y + rr * 0.55f)
+            close()
+        }
+        drawPath(tail, MapRedAlert, alpha = alpha)
+        drawCircle(MapRedAlert, rr, head, alpha = alpha)
+        drawCircle(Color.White, rr * 0.38f, head, alpha = alpha)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2D labels — upright, sized by zoom, hidden when they don't fit their room
+// -----------------------------------------------------------------------------
+
+private fun DrawScope.drawRoomLabels(
+    floor: Floor,
+    labelTexts: Map<String, String>,
+    pj: MapProjector,
+    fitScale: Float,
+    tm: TextMeasurer,
+    language: AppLanguage,
+    alpha: Float
+) {
+    val ratio = pj.cam.scale / fitScale
+    val fs = (9f + (ratio - 1f) * 2.2f).coerceIn(9f, 13f)
+    for (room in floor.rooms) {
+        if (room.name.isBlank() || room.polygon.size < 3) continue
+        val text = labelTexts[room.id] ?: continue
+        val box = projectedBox(room.boundsLeft, room.boundsTop, room.boundsLeft + room.boundsWidth, room.boundsTop + room.boundsHeight, pj)
+        val c = room.labelAt?.let { pj.project(it.x, it.y, 0f) } ?: Offset((box[0] + box[2]) / 2f, (box[1] + box[3]) / 2f)
+        val bw = if (room.labelAt != null) 2f * min(c.x - box[0], box[2] - c.x) else box[2] - box[0]
+        val bh = if (room.labelAt != null) 2f * min(c.y - box[1], box[3] - c.y) else box[3] - box[1]
+        val style = TextStyle(
+            fontSize = fs.sp, lineHeight = (fs * 1.15f).sp, fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center, color = cachedColor(room.textColorHex, MapInk)
+        )
+        drawFittedLabel(tm, text, c, bw, bh, style, alpha)
+    }
+    for (label in floor.labels) {
+        val box = projectedBox(label.x - label.w / 2f, label.y - label.h / 2f, label.x + label.w / 2f, label.y + label.h / 2f, pj)
+        val c = pj.project(label.x, label.y, 0f)
+        val text = HospitalLocalization.sentenceCase(
+            if (language == AppLanguage.ENGLISH && label.nameEn.isNotBlank()) label.nameEn else label.name
+        ).uppercase()
+        val style = TextStyle(
+            fontSize = (fs - 1f).sp, lineHeight = (fs * 1.1f).sp, fontWeight = FontWeight.Bold, letterSpacing = 0.4.sp,
+            textAlign = TextAlign.Center, color = Color(0xFF3C4043),
+            shadow = Shadow(Color.White, Offset.Zero, blurRadius = 6f)
+        )
+        drawFittedLabel(tm, text, c, box[2] - box[0], box[3] - box[1], style, alpha)
+    }
+}
+
+private fun projectedBox(x0: Float, y0: Float, x1: Float, y1: Float, pj: MapProjector): FloatArray {
+    val pts = listOf(pj.project(x0, y0, 0f), pj.project(x1, y0, 0f), pj.project(x1, y1, 0f), pj.project(x0, y1, 0f))
+    return floatArrayOf(pts.minOf { it.x }, pts.minOf { it.y }, pts.maxOf { it.x }, pts.maxOf { it.y })
+}
+
+private fun DrawScope.drawFittedLabel(
+    tm: TextMeasurer,
+    text: String,
+    center: Offset,
+    boxW: Float,
+    boxH: Float,
+    style: TextStyle,
+    alpha: Float
+) {
+    val margin = 40.dp.toPx()
+    if (center.x < -margin || center.y < -margin || center.x > size.width + margin || center.y > size.height + margin) return
+    if (boxW < 24.dp.toPx() || boxH < 12.dp.toPx()) return
+    // quantize width so the TextMeasurer cache is hit while panning/zooming
+    val step = 8
+    val maxW = ((boxW - 4.dp.toPx()).toInt() / step) * step
+    if (maxW <= 0) return
+    val layout = tm.measure(
+        text = text, style = style, overflow = TextOverflow.Clip, softWrap = true, maxLines = 3,
+        constraints = Constraints(maxWidth = maxW)
+    )
+    if (layout.hasVisualOverflow || layout.size.height > boxH - 2f) return
+    // never break inside a word — hide the label instead
+    for (i in 0 until layout.lineCount - 1) {
+        val end = layout.getLineEnd(i)
+        if (end in 1 until text.length && text[end - 1] != ' ' && text[end] != ' ') return
+    }
+    drawText(layout, topLeft = Offset(center.x - layout.size.width / 2f, center.y - layout.size.height / 2f), alpha = alpha)
+}
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+private val colorCache = HashMap<String, Color>()
+
+private fun cachedColor(hex: String, fallback: Color): Color =
+    colorCache.getOrPut(hex) {
+        try { Color(android.graphics.Color.parseColor(hex)) } catch (_: Exception) { fallback }
+    }
 
 private fun pointInPolygon(x: Float, y: Float, poly: List<Point2D>): Boolean {
     var inside = false
     var j = poly.size - 1
     for (i in poly.indices) {
-        val pi = poly[i]
-        val pj = poly[j]
-        if ((pi.y > y) != (pj.y > y) &&
-            x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x
-        ) {
-            inside = !inside
-        }
+        val pi = poly[i]; val pj = poly[j]
+        if ((pi.y > y) != (pj.y > y) && x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x) inside = !inside
         j = i
     }
     return inside
 }
 
-private fun pointInPolygonOffset(x: Float, y: Float, poly: List<Offset>): Boolean {
+private fun pointInPolygon(p: Offset, poly: List<Offset>): Boolean {
     var inside = false
     var j = poly.size - 1
     for (i in poly.indices) {
-        val pi = poly[i]
-        val pj = poly[j]
-        if ((pi.y > y) != (pj.y > y) &&
-            x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x
-        ) {
-            inside = !inside
-        }
+        val a = poly[i]; val b = poly[j]
+        if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside
         j = i
     }
     return inside
-}
-
-private fun DrawScope.drawBlueprintGrid(width: Float, height: Float) {
-    val gridColor = Color(0xFFE2E8F0)
-    val step = 32f
-    var x = 0f
-    while (x < width) {
-        drawLine(gridColor, Offset(x, 0f), Offset(x, height), strokeWidth = 0.8f)
-        x += step
-    }
-    var y = 0f
-    while (y < height) {
-        drawLine(gridColor, Offset(0f, y), Offset(width, y), strokeWidth = 0.8f)
-        y += step
-    }
-}
-
-private fun DrawScope.drawLegendBox(
-    left: Float,
-    top: Float,
-    language: AppLanguage,
-    textMeasurer: TextMeasurer
-) {
-    drawRoundRect(
-        color = Color.White.copy(alpha = 0.92f),
-        topLeft = Offset(left, top),
-        size = Size(170f, 62f),
-        cornerRadius = CornerRadius(8f, 8f)
-    )
-    drawRoundRect(
-        color = Color(0xFFCBD5E1),
-        topLeft = Offset(left, top),
-        size = Size(170f, 62f),
-        cornerRadius = CornerRadius(8f, 8f),
-        style = Stroke(1f)
-    )
-
-    val title = if (language == AppLanguage.VIETNAMESE) "CHÚ THÍCH" else "LEGEND"
-    val t = textMeasurer.measure(AnnotatedString(title), TextStyle(color = Color(0xFF475569), fontSize = 8.sp, fontWeight = FontWeight.Bold))
-    drawText(t, topLeft = Offset(left + 8f, top + 5f))
-
-    // Items
-    val items = listOf(
-        Pair(Color(0xFFCFE0E8), if (language == AppLanguage.VIETNAMESE) "Phòng khám" else "Clinics"),
-        Pair(Color(0xFF1F5F63), if (language == AppLanguage.VIETNAMESE) "Phẫu thuật" else "Surgery"),
-        Pair(Color(0xFFA9C3A4), if (language == AppLanguage.VIETNAMESE) "Thang máy" else "Elevator"),
-        Pair(Color(0xFFE89A3C), if (language == AppLanguage.VIETNAMESE) "Thang bộ" else "Stairs")
-    )
-
-    var ix = left + 8f
-    var iy = top + 20f
-    for ((idx, it) in items.withIndex()) {
-        drawCircle(it.first, radius = 4f, center = Offset(ix + 4f, iy + 6f))
-        val text = textMeasurer.measure(AnnotatedString(it.second), TextStyle(color = Color(0xFF334155), fontSize = 7.5.sp))
-        drawText(text, topLeft = Offset(ix + 12f, iy))
-        if (idx % 2 == 1) {
-            ix = left + 8f
-            iy += 18f
-        } else {
-            ix += 80f
-        }
-    }
-}
-
-@Composable
-private fun MapControlButton(
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit,
-    testTag: String
-) {
-    Surface(
-        onClick = onClick,
-        shape = CircleShape,
-        color = Color.White,
-        shadowElevation = 3.dp,
-        modifier = Modifier
-            .size(42.dp)
-            .testTag(testTag)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = Color(0xFF1E293B),
-                modifier = Modifier.size(20.dp)
-            )
-        }
-    }
 }

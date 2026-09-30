@@ -1,5 +1,8 @@
 package com.example.hospital.presentation.util
 
+import com.example.hospital.domain.model.Room
+import java.util.Locale
+
 enum class AppLanguage(val code: String, val displayName: String) {
     VIETNAMESE("vi", "Tiếng Việt"),
     ENGLISH("en", "English")
@@ -195,5 +198,48 @@ object HospitalLocalization {
             "room_502" -> if (lang == AppLanguage.VIETNAMESE) "Chấn thương chỉnh hình 2" else "Orthopedics Clinic 2"
             else -> if (lang == AppLanguage.ENGLISH) "Floor 1" else fallback
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Mobile redesign helpers
+    // -------------------------------------------------------------------------
+
+    /** Inline bilingual string: HospitalLocalization.t(lang, "Tiếng Việt", "English"). */
+    fun t(lang: AppLanguage, vi: String, en: String): String =
+        if (lang == AppLanguage.VIETNAMESE) vi else en
+
+    private val viLocale: Locale = Locale.forLanguageTag("vi")
+    private val vowelRegex = Regex("[AEIOUYĂÂÊÔƠƯÁÀẢÃẠÉÈẺẼẸÍÌỈĨỊÓÒỎÕỌÚÙỦŨỤÝỲỶỸỴẮẰẲẴẶẤẦẨẪẬẾỀỂỄỆỐỒỔỖỘỚỜỞỠỢỨỪỬỮỰ]", RegexOption.IGNORE_CASE)
+    private val whitespace = Regex("\\s+")
+
+    /** "PHÒNG KHÁM NỘI" → "Phòng khám nội". Short vowel-less tokens (e.g. "CT") keep their case. */
+    fun sentenceCase(s: String): String =
+        s.trim().split(whitespace).mapIndexed { i, w ->
+            if (w.length <= 3 && !vowelRegex.containsMatchIn(w)) w
+            else {
+                val l = w.lowercase(viLocale)
+                if (i == 0) l.replaceFirstChar { it.titlecase(viLocale) } else l
+            }
+        }.joinToString(" ")
+
+    /** Label for elevators/stairs: "Thang máy EF", "Thang bộ 2" (suffix taken from the shaft link id). */
+    fun shaftLabel(room: Room, lang: AppLanguage): String {
+        val base = if (room.kind == "elevator") t(lang, "Thang máy", "Elevator") else t(lang, "Thang bộ", "Stairs")
+        val suffix = room.link?.substringAfter('-', "")?.takeIf { it.isNotBlank() && it.length <= 3 } ?: ""
+        return if (suffix.isEmpty()) base else "$base $suffix"
+    }
+
+    /** Display name of a polygon room in the current language, sentence-cased. */
+    fun roomLabel(room: Room, lang: AppLanguage): String {
+        if (room.kind == "elevator" || room.kind == "stair") return shaftLabel(room, lang)
+        val raw = if (lang == AppLanguage.ENGLISH && room.nameEn.isNotBlank()) room.nameEn else room.name
+        return sentenceCase(raw).ifBlank { t(lang, "Không tên", "Unnamed") }
+    }
+
+    /** The room name in the other language (secondary line), or "" if missing. */
+    fun roomAltLabel(room: Room, lang: AppLanguage): String {
+        if (room.kind == "elevator" || room.kind == "stair") return ""
+        val raw = if (lang == AppLanguage.ENGLISH) room.name else room.nameEn
+        return if (raw.isBlank()) "" else sentenceCase(raw)
     }
 }

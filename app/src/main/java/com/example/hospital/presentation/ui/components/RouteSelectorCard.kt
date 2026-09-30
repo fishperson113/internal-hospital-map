@@ -1,28 +1,67 @@
 package com.example.hospital.presentation.ui.components
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Accessible
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.Stairs
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hospital.domain.model.Room
+import com.example.hospital.presentation.state.TransferPreference
 import com.example.hospital.presentation.util.AppLanguage
 import com.example.hospital.presentation.util.HospitalLocalization
+import com.example.ui.theme.MapBlueContainer
+import com.example.ui.theme.MapBlueContainerStroke
+import com.example.ui.theme.MapBluePrimary
+import com.example.ui.theme.MapGreenContainer
+import com.example.ui.theme.MapGreenSuccess
+import com.example.ui.theme.MapInk
+import com.example.ui.theme.MapInkMuted
+import com.example.ui.theme.MapInkSubtle
+import com.example.ui.theme.MapRedAlert
 
+/**
+ * Floating From/To card (stacked vertically so long Vietnamese room names fit on a phone).
+ * Right column: close route (top) and swap From/To (bottom).
+ */
 @Composable
 fun RouteSelectorCard(
     startRoom: Room?,
@@ -31,143 +70,124 @@ fun RouteSelectorCard(
     onStartRoomClick: () -> Unit,
     onDestRoomClick: () -> Unit,
     onSwapClick: () -> Unit,
+    onCloseClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .testTag("route_selector_card"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    Surface(
+        shape = FloatingCardShape,
+        color = Color.White,
+        shadowElevation = FloatingElevation,
+        modifier = modifier.fillMaxWidth().testTag("route_selector_card")
     ) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .height(IntrinsicSize.Min)
+                .padding(start = 14.dp, top = 4.dp, bottom = 4.dp, end = 4.dp)
         ) {
-            // Start Room Column
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { onStartRoomClick() }
-                    .padding(2.dp),
-                verticalAlignment = Alignment.CenterVertically
+            // From ● ⋮ 📍 To
+            Column(
+                modifier = Modifier.width(16.dp).fillMaxHeight().padding(top = 19.dp, bottom = 15.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFE8F5E9)),
+                    Modifier.size(16.dp).clip(CircleShape).background(MapGreenContainer),
                     contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = null,
-                        tint = Color(0xFF2E7D32),
-                        modifier = Modifier.size(20.dp)
+                ) { Box(Modifier.size(10.dp).clip(CircleShape).background(MapGreenSuccess)) }
+                Canvas(modifier = Modifier.weight(1f).width(2.dp).padding(vertical = 3.dp)) {
+                    drawLine(
+                        color = Color(0xFFBDC1C6),
+                        start = Offset(size.width / 2f, 0f), end = Offset(size.width / 2f, size.height),
+                        strokeWidth = size.width, cap = StrokeCap.Round,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 3.dp.toPx()))
                     )
                 }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                Column {
-                    Text(
-                        text = HospitalLocalization.getFromLabel(language),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF2E7D32)
-                    )
-                    val startName = startRoom?.let { HospitalLocalization.getRoomDisplayName(it.id, it.name, language) }
-                        ?: if (language == AppLanguage.VIETNAMESE) "Chọn điểm đi" else "Select Start"
-                    Text(
-                        text = startName,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1E293B),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    val startDesc = startRoom?.let { HospitalLocalization.getRoomDescription(it.id, it.description, language) } ?: ""
-                    Text(
-                        text = "${HospitalLocalization.getFloorLabel(startRoom?.floorLevel ?: 1, language)} • $startDesc",
-                        fontSize = 10.sp,
-                        color = Color(0xFF64748B),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                Icon(Icons.Default.LocationOn, contentDescription = null, tint = MapRedAlert, modifier = Modifier.size(18.dp))
             }
-
-            // Arrow / Swap Button
-            IconButton(
-                onClick = onSwapClick,
-                modifier = Modifier
-                    .size(32.dp)
-                    .testTag("swap_rooms_button")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = "Swap",
-                    tint = Color(0xFF0077D7),
-                    modifier = Modifier.size(18.dp)
+            Column(modifier = Modifier.weight(1f)) {
+                RouteField(
+                    label = "${HospitalLocalization.getFromLabel(language)} · ${startRoom?.let { HospitalLocalization.getFloorLabel(it.floorLevel, language) } ?: ""}",
+                    value = startRoom?.let { HospitalLocalization.roomLabel(it, language) } ?: HospitalLocalization.getSelectStartPrompt(language),
+                    isPlaceholder = startRoom == null,
+                    onClick = onStartRoomClick,
+                    testTag = "route_from_field"
+                )
+                HorizontalDivider(color = Color(0xFFECEFF1), modifier = Modifier.padding(horizontal = 8.dp))
+                RouteField(
+                    label = "${HospitalLocalization.getToLabel(language)} · ${destRoom?.let { HospitalLocalization.getFloorLabel(it.floorLevel, language) } ?: ""}",
+                    value = destRoom?.let { HospitalLocalization.roomLabel(it, language) } ?: HospitalLocalization.getSelectDestPrompt(language),
+                    isPlaceholder = destRoom == null,
+                    onClick = onDestRoomClick,
+                    testTag = "route_to_field"
                 )
             }
-
-            // Destination Room Column
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { onDestRoomClick() }
-                    .padding(2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFFFEBEE)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = null,
-                        tint = Color(0xFFD32F2F),
-                        modifier = Modifier.size(20.dp)
-                    )
+            Column(modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
+                IconButton(onClick = onCloseClick, modifier = Modifier.size(44.dp).testTag("clear_route_button")) {
+                    Icon(Icons.Default.Close, contentDescription = HospitalLocalization.getCloseButtonLabel(language), tint = MapInkMuted)
                 }
+                IconButton(onClick = onSwapClick, modifier = Modifier.size(44.dp).testTag("swap_rooms_button")) {
+                    Icon(Icons.Default.SwapVert, contentDescription = HospitalLocalization.t(language, "Đổi chiều", "Swap"), tint = MapInk)
+                }
+            }
+        }
+    }
+}
 
-                Spacer(modifier = Modifier.width(6.dp))
+@Composable
+private fun RouteField(label: String, value: String, isPlaceholder: Boolean, onClick: () -> Unit, testTag: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp)
+            .testTag(testTag),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(label, fontSize = 11.sp, color = MapInkMuted, maxLines = 1)
+        Text(
+            value, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+            color = if (isPlaceholder) MapInkSubtle else MapInk,
+            maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+    }
+}
 
-                Column {
-                    Text(
-                        text = HospitalLocalization.getToLabel(language),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFFD32F2F)
-                    )
-                    val destName = destRoom?.let { HospitalLocalization.getRoomDisplayName(it.id, it.name, language) }
-                        ?: if (language == AppLanguage.VIETNAMESE) "Chọn điểm đến" else "Select Dest"
-                    Text(
-                        text = destName,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1E293B),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    val destDesc = destRoom?.let { HospitalLocalization.getRoomDescription(it.id, it.description, language) } ?: ""
-                    Text(
-                        text = "${HospitalLocalization.getFloorLabel(destRoom?.floorLevel ?: 1, language)} • $destDesc",
-                        fontSize = 10.sp,
-                        color = Color(0xFF64748B),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+/** "Nhanh nhất / Chỉ thang máy / Chỉ thang bộ" — which shafts the route may use. */
+@Composable
+fun TransferPreferenceChips(
+    selected: TransferPreference,
+    language: AppLanguage,
+    onSelect: (TransferPreference) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()).padding(bottom = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        TransferPreference.entries.forEach { pref ->
+            val (label, icon) = when (pref) {
+                TransferPreference.FASTEST -> HospitalLocalization.t(language, "Nhanh nhất", "Fastest") to Icons.Default.Bolt
+                TransferPreference.ELEVATOR_ONLY -> HospitalLocalization.t(language, "Chỉ thang máy", "Elevator only") to Icons.Default.Accessible
+                TransferPreference.STAIRS_ONLY -> HospitalLocalization.t(language, "Chỉ thang bộ", "Stairs only") to Icons.Default.Stairs
+            }
+            val on = pref == selected
+            val fg = if (on) MapBluePrimary else Color(0xFF3C4043)
+            Surface(
+                onClick = { onSelect(pref) },
+                shape = RoundedCornerShape(16.dp),
+                color = if (on) MapBlueContainer else Color.White,
+                border = BorderStroke(1.dp, if (on) MapBlueContainerStroke else Color.White),
+                shadowElevation = 1.dp,
+                modifier = Modifier.testTag("transfer_pref_${pref.name.lowercase()}")
+            ) {
+                Row(
+                    modifier = Modifier.height(32.dp).padding(start = 8.dp, end = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(18.dp))
+                    Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = fg)
                 }
             }
         }
