@@ -1,0 +1,2350 @@
+diff --git a/app/src/main/java/com/example/MainActivity.kt b/app/src/main/java/com/example/MainActivity.kt
+--- a/app/src/main/java/com/example/MainActivity.kt
++++ b/app/src/main/java/com/example/MainActivity.kt
+@@ -7,16 +7,9 @@
+ import androidx.activity.viewModels
+ import com.example.di.ViewModelFactory
+ import com.example.hospital.presentation.viewmodel.HospitalMapViewModel
+-import com.example.ui.screen.MapScreen
+ import com.example.ui.theme.MyApplicationTheme
+-import com.example.ui.viewmodel.MapViewModel
+ 
+ class MainActivity : ComponentActivity() {
+-
+-    private val mapViewModel: MapViewModel by viewModels {
+-        val app = application as MapApplication
+-        ViewModelFactory(app.container)
+-    }
+ 
+     private val hospitalMapViewModel: HospitalMapViewModel by viewModels {
+         val app = application as MapApplication
+diff --git a/app/src/main/java/com/example/di/ViewModelFactory.kt b/app/src/main/java/com/example/di/ViewModelFactory.kt
+--- a/app/src/main/java/com/example/di/ViewModelFactory.kt
++++ b/app/src/main/java/com/example/di/ViewModelFactory.kt
+@@ -7,7 +7,6 @@
+ import com.example.hospital.domain.usecase.GetHospitalMapUseCase
+ import com.example.hospital.domain.usecase.SearchRoomsUseCase
+ import com.example.hospital.presentation.viewmodel.HospitalMapViewModel
+-import com.example.ui.viewmodel.MapViewModel
+ 
+ class ViewModelFactory(
+     private val appContainer: AppContainer
+@@ -22,9 +21,6 @@
+                     searchRoomsUseCase = appContainer.searchRoomsUseCase,
+                     findHospitalRouteUseCase = appContainer.findHospitalRouteUseCase
+                 ) as T
+-            }
+-            modelClass.isAssignableFrom(MapViewModel::class.java) -> {
+-                MapViewModel(appContainer.mapRepository) as T
+             }
+             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+         }
+diff --git a/app/src/main/java/com/example/ui/screen/MapScreen.kt b/app/src/main/java/com/example/ui/screen/MapScreen.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/MapScreen.kt
++++ /dev/null
+@@ -1,182 +0,0 @@
+-package com.example.ui.screen
+-
+-import androidx.compose.animation.AnimatedVisibility
+-import androidx.compose.animation.fadeIn
+-import androidx.compose.animation.fadeOut
+-import androidx.compose.animation.slideInVertically
+-import androidx.compose.animation.slideOutVertically
+-import androidx.compose.foundation.layout.Box
+-import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.fillMaxSize
+-import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.navigationBarsPadding
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.statusBarsPadding
+-import androidx.compose.material3.Scaffold
+-import androidx.compose.material3.SnackbarHost
+-import androidx.compose.material3.SnackbarHostState
+-import androidx.compose.runtime.Composable
+-import androidx.compose.runtime.LaunchedEffect
+-import androidx.compose.runtime.getValue
+-import androidx.compose.runtime.remember
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.platform.testTag
+-import androidx.compose.ui.unit.dp
+-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+-import com.example.ui.screen.components.ApiConfigDialog
+-import com.example.ui.screen.components.CategoryFilterChips
+-import com.example.ui.screen.components.InteractiveMapCanvas
+-import com.example.ui.screen.components.MapControlsOverlay
+-import com.example.ui.screen.components.MapLayersSheet
+-import com.example.ui.screen.components.MapSearchBar
+-import com.example.ui.screen.components.NavigationRouteCard
+-import com.example.ui.screen.components.PlaceDetailBottomSheet
+-import com.example.ui.screen.components.SavedPlacesSheet
+-import com.example.ui.viewmodel.MapViewModel
+-
+-@Composable
+-fun MapScreen(
+-    viewModel: MapViewModel,
+-    modifier: Modifier = Modifier
+-) {
+-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+-    val snackbarHostState = remember { SnackbarHostState() }
+-
+-    LaunchedEffect(uiState.userNotice) {
+-        uiState.userNotice?.let { notice ->
+-            snackbarHostState.showSnackbar(notice)
+-            viewModel.onDismissNotice()
+-        }
+-    }
+-
+-    Scaffold(
+-        modifier = modifier
+-            .fillMaxSize()
+-            .testTag("map_screen"),
+-        snackbarHost = {
+-            SnackbarHost(
+-                hostState = snackbarHostState,
+-                modifier = Modifier.navigationBarsPadding()
+-            )
+-        }
+-    ) { innerPadding ->
+-        Box(
+-            modifier = Modifier
+-                .fillMaxSize()
+-                .padding(innerPadding)
+-        ) {
+-            // 1. Full-screen Interactive Vector Map Canvas
+-            InteractiveMapCanvas(
+-                viewport = uiState.viewport,
+-                places = uiState.places,
+-                selectedPlace = uiState.selectedPlace,
+-                activeRoute = uiState.activeRoute,
+-                userLocation = uiState.userLocation,
+-                onPlaceSelected = { viewModel.onPlaceSelected(it) },
+-                onPan = { deltaLat, deltaLng -> viewModel.onPan(deltaLat, deltaLng) }
+-            )
+-
+-            // 2. Top Bar (Search + Categories or Navigation Card)
+-            Column(
+-                modifier = Modifier
+-                    .fillMaxWidth()
+-                    .align(Alignment.TopCenter)
+-                    .statusBarsPadding()
+-            ) {
+-                if (uiState.activeRoute != null) {
+-                    NavigationRouteCard(
+-                        route = uiState.activeRoute!!,
+-                        onStopNavigation = { viewModel.onStopNavigation() }
+-                    )
+-                } else {
+-                    MapSearchBar(
+-                        query = uiState.searchQuery,
+-                        onQueryChange = { viewModel.onSearchQueryChange(it) },
+-                        onOpenApiConfig = { viewModel.onToggleApiConfigDialog(true) },
+-                        onOpenSavedPlaces = { viewModel.onToggleSavedSheet(true) },
+-                        savedCount = uiState.savedPlaces.size
+-                    )
+-
+-                    CategoryFilterChips(
+-                        selectedCategory = uiState.selectedCategory,
+-                        onCategorySelected = { viewModel.onCategorySelected(it) }
+-                    )
+-                }
+-            }
+-
+-            // 3. Right Floating Map Controls
+-            MapControlsOverlay(
+-                onCenterMyLocation = { viewModel.onCenterOnMyLocation() },
+-                onToggleLayers = { viewModel.onToggleLayersSheet(true) },
+-                onZoomIn = { viewModel.onZoomIn() },
+-                onZoomOut = { viewModel.onZoomOut() },
+-                modifier = Modifier
+-                    .align(Alignment.CenterEnd)
+-                    .padding(end = 16.dp)
+-            )
+-
+-            // 4. Bottom Sheets
+-            // 4a. Place Detail Sheet
+-            AnimatedVisibility(
+-                visible = uiState.selectedPlace != null && uiState.activeRoute == null,
+-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+-                modifier = Modifier
+-                    .align(Alignment.BottomCenter)
+-                    .navigationBarsPadding()
+-            ) {
+-                uiState.selectedPlace?.let { place ->
+-                    PlaceDetailBottomSheet(
+-                        place = place,
+-                        onStartNavigation = { viewModel.onStartNavigation(it) },
+-                        onToggleSave = { viewModel.onToggleSavePlace(it) },
+-                        onDismiss = { viewModel.onClearSelectedPlace() }
+-                    )
+-                }
+-            }
+-
+-            // 4b. Map Layers Sheet
+-            AnimatedVisibility(
+-                visible = uiState.showLayersSheet,
+-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+-                modifier = Modifier
+-                    .align(Alignment.BottomCenter)
+-                    .navigationBarsPadding()
+-            ) {
+-                MapLayersSheet(
+-                    currentLayer = uiState.viewport.layerType,
+-                    onLayerSelected = { viewModel.onLayerSelected(it) },
+-                    onDismiss = { viewModel.onToggleLayersSheet(false) }
+-                )
+-            }
+-
+-            // 4c. Saved Places Sheet
+-            AnimatedVisibility(
+-                visible = uiState.showSavedSheet,
+-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+-                modifier = Modifier
+-                    .align(Alignment.BottomCenter)
+-                    .navigationBarsPadding()
+-            ) {
+-                SavedPlacesSheet(
+-                    savedPlaces = uiState.savedPlaces,
+-                    onSelectPlace = { viewModel.onPlaceSelected(it) },
+-                    onRemoveSaved = { viewModel.onToggleSavePlace(it) },
+-                    onDismiss = { viewModel.onToggleSavedSheet(false) }
+-                )
+-            }
+-
+-            // 5. Developer API Configuration Modal Dialog
+-            if (uiState.showApiConfigDialog) {
+-                ApiConfigDialog(
+-                    config = uiState.apiConfig,
+-                    onSaveConfig = { viewModel.onSaveApiConfig(it) },
+-                    onDismiss = { viewModel.onToggleApiConfigDialog(false) }
+-                )
+-            }
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/example/ui/screen/components/ApiConfigDialog.kt b/app/src/main/java/com/example/ui/screen/components/ApiConfigDialog.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/components/ApiConfigDialog.kt
++++ /dev/null
+@@ -1,286 +0,0 @@
+-package com.example.ui.screen.components
+-
+-import androidx.compose.foundation.background
+-import androidx.compose.foundation.layout.Arrangement
+-import androidx.compose.foundation.layout.Box
+-import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.Row
+-import androidx.compose.foundation.layout.Spacer
+-import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.height
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.layout.width
+-import androidx.compose.foundation.lazy.LazyColumn
+-import androidx.compose.foundation.lazy.items
+-import androidx.compose.foundation.shape.RoundedCornerShape
+-import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.filled.CheckCircle
+-import androidx.compose.material.icons.filled.Close
+-import androidx.compose.material.icons.filled.Code
+-import androidx.compose.material.icons.filled.Http
+-import androidx.compose.material.icons.filled.Key
+-import androidx.compose.material.icons.filled.Link
+-import androidx.compose.material3.Button
+-import androidx.compose.material3.Card
+-import androidx.compose.material3.CardDefaults
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.IconButton
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.OutlinedTextField
+-import androidx.compose.material3.Surface
+-import androidx.compose.material3.Switch
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.runtime.getValue
+-import androidx.compose.runtime.mutableStateOf
+-import androidx.compose.runtime.remember
+-import androidx.compose.runtime.setValue
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.draw.clip
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.platform.testTag
+-import androidx.compose.ui.text.font.FontFamily
+-import androidx.compose.ui.text.font.FontWeight
+-import androidx.compose.ui.unit.dp
+-import androidx.compose.ui.unit.sp
+-import androidx.compose.ui.window.Dialog
+-import androidx.compose.ui.window.DialogProperties
+-import com.example.data.model.ApiConfig
+-
+-@Composable
+-fun ApiConfigDialog(
+-    config: ApiConfig,
+-    onSaveConfig: (ApiConfig) -> Unit,
+-    onDismiss: () -> Unit
+-) {
+-    var baseUrl by remember { mutableStateOf(config.baseUrl) }
+-    var apiKey by remember { mutableStateOf(config.apiKey) }
+-    var isMockMode by remember { mutableStateOf(config.isMockMode) }
+-
+-    Dialog(
+-        onDismissRequest = onDismiss,
+-        properties = DialogProperties(usePlatformDefaultWidth = false)
+-    ) {
+-        Card(
+-            modifier = Modifier
+-                .fillMaxWidth(0.92f)
+-                .padding(vertical = 16.dp)
+-                .testTag("api_config_dialog"),
+-            shape = RoundedCornerShape(24.dp),
+-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+-        ) {
+-            Column(
+-                modifier = Modifier
+-                    .fillMaxWidth()
+-                    .padding(20.dp)
+-            ) {
+-                // Header
+-                Row(
+-                    modifier = Modifier.fillMaxWidth(),
+-                    horizontalArrangement = Arrangement.SpaceBetween,
+-                    verticalAlignment = Alignment.CenterVertically
+-                ) {
+-                    Row(verticalAlignment = Alignment.CenterVertically) {
+-                        Icon(
+-                            imageVector = Icons.Default.Code,
+-                            contentDescription = null,
+-                            tint = MaterialTheme.colorScheme.primary,
+-                            modifier = Modifier.size(24.dp)
+-                        )
+-                        Spacer(modifier = Modifier.width(8.dp))
+-                        Text(
+-                            text = "Tích hợp API Bản đồ",
+-                            style = MaterialTheme.typography.titleLarge.copy(
+-                                fontWeight = FontWeight.Bold,
+-                                fontSize = 18.sp
+-                            )
+-                        )
+-                    }
+-
+-                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+-                        Icon(
+-                            imageVector = Icons.Default.Close,
+-                            contentDescription = "Đóng",
+-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+-                        )
+-                    }
+-                }
+-
+-                Spacer(modifier = Modifier.height(12.dp))
+-
+-                Text(
+-                    text = "Repo đã thiết lập sẵn Retrofit, Moshi, MVVM & Kotlin Flow. Bạn có thể nhập Base URL hoặc gửi API schema để kết nối ngay.",
+-                    style = MaterialTheme.typography.bodySmall,
+-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+-                    lineHeight = 18.sp
+-                )
+-
+-                Spacer(modifier = Modifier.height(12.dp))
+-
+-                // Mock Mode Switch
+-                Surface(
+-                    shape = RoundedCornerShape(12.dp),
+-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+-                    modifier = Modifier.fillMaxWidth()
+-                ) {
+-                    Row(
+-                        modifier = Modifier
+-                            .fillMaxWidth()
+-                            .padding(horizontal = 12.dp, vertical = 8.dp),
+-                        verticalAlignment = Alignment.CenterVertically,
+-                        horizontalArrangement = Arrangement.SpaceBetween
+-                    ) {
+-                        Column(modifier = Modifier.weight(1f)) {
+-                            Text(
+-                                text = "Chế độ Mock dữ liệu",
+-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+-                            )
+-                            Text(
+-                                text = if (isMockMode) "Đang dùng dữ liệu mẫu phong phú" else "Gọi trực tiếp đến API từ xa",
+-                                style = MaterialTheme.typography.labelSmall,
+-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+-                            )
+-                        }
+-                        Switch(
+-                            checked = isMockMode,
+-                            onCheckedChange = { isMockMode = it },
+-                            modifier = Modifier.testTag("mock_mode_switch")
+-                        )
+-                    }
+-                }
+-
+-                Spacer(modifier = Modifier.height(10.dp))
+-
+-                // Base URL input
+-                OutlinedTextField(
+-                    value = baseUrl,
+-                    onValueChange = { baseUrl = it },
+-                    label = { Text("API Base URL") },
+-                    leadingIcon = {
+-                        Icon(
+-                            imageVector = Icons.Default.Link,
+-                            contentDescription = null,
+-                            tint = MaterialTheme.colorScheme.primary,
+-                            modifier = Modifier.size(18.dp)
+-                        )
+-                    },
+-                    singleLine = true,
+-                    modifier = Modifier
+-                        .fillMaxWidth()
+-                        .testTag("base_url_input"),
+-                    shape = RoundedCornerShape(12.dp)
+-                )
+-
+-                Spacer(modifier = Modifier.height(8.dp))
+-
+-                // API Key input
+-                OutlinedTextField(
+-                    value = apiKey,
+-                    onValueChange = { apiKey = it },
+-                    label = { Text("API Key / Bearer Token (Tùy chọn)") },
+-                    leadingIcon = {
+-                        Icon(
+-                            imageVector = Icons.Default.Key,
+-                            contentDescription = null,
+-                            tint = MaterialTheme.colorScheme.primary,
+-                            modifier = Modifier.size(18.dp)
+-                        )
+-                    },
+-                    singleLine = true,
+-                    modifier = Modifier
+-                        .fillMaxWidth()
+-                        .testTag("api_key_input"),
+-                    shape = RoundedCornerShape(12.dp)
+-                )
+-
+-                Spacer(modifier = Modifier.height(12.dp))
+-
+-                // Predefined Endpoints List
+-                Text(
+-                    text = "Các Endpoints đã dựng sẵn trong Retrofit:",
+-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+-                    color = MaterialTheme.colorScheme.onSurface
+-                )
+-
+-                Spacer(modifier = Modifier.height(6.dp))
+-
+-                LazyColumn(
+-                    modifier = Modifier
+-                        .fillMaxWidth()
+-                        .height(130.dp),
+-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+-                ) {
+-                    items(config.endpoints) { ep ->
+-                        Surface(
+-                            shape = RoundedCornerShape(8.dp),
+-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+-                        ) {
+-                            Column(modifier = Modifier.padding(8.dp)) {
+-                                Row(verticalAlignment = Alignment.CenterVertically) {
+-                                    Surface(
+-                                        shape = RoundedCornerShape(4.dp),
+-                                        color = if (ep.method == "GET") Color(0xFF2E7D32) else Color(0xFF1565C0)
+-                                    ) {
+-                                        Text(
+-                                            text = ep.method,
+-                                            style = MaterialTheme.typography.labelSmall.copy(
+-                                                color = Color.White,
+-                                                fontWeight = FontWeight.Bold,
+-                                                fontSize = 10.sp
+-                                            ),
+-                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+-                                        )
+-                                    }
+-                                    Spacer(modifier = Modifier.width(6.dp))
+-                                    Text(
+-                                        text = ep.path,
+-                                        style = MaterialTheme.typography.bodySmall.copy(
+-                                            fontFamily = FontFamily.Monospace,
+-                                            fontSize = 11.sp
+-                                        )
+-                                    )
+-                                }
+-                                Spacer(modifier = Modifier.height(2.dp))
+-                                Text(
+-                                    text = ep.description,
+-                                    style = MaterialTheme.typography.labelSmall,
+-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+-                                )
+-                            }
+-                        }
+-                    }
+-                }
+-
+-                Spacer(modifier = Modifier.height(16.dp))
+-
+-                // Save button
+-                Button(
+-                    onClick = {
+-                        onSaveConfig(
+-                            config.copy(
+-                                baseUrl = baseUrl,
+-                                apiKey = apiKey,
+-                                isMockMode = isMockMode
+-                            )
+-                        )
+-                    },
+-                    modifier = Modifier
+-                        .fillMaxWidth()
+-                        .height(48.dp)
+-                        .testTag("save_api_config_button"),
+-                    shape = RoundedCornerShape(12.dp)
+-                ) {
+-                    Icon(
+-                        imageVector = Icons.Default.CheckCircle,
+-                        contentDescription = null,
+-                        modifier = Modifier.size(18.dp)
+-                    )
+-                    Spacer(modifier = Modifier.width(6.dp))
+-                    Text(text = "Lưu cấu hình", fontWeight = FontWeight.Bold)
+-                }
+-            }
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/example/ui/screen/components/CategoryFilterChips.kt b/app/src/main/java/com/example/ui/screen/components/CategoryFilterChips.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/components/CategoryFilterChips.kt
++++ /dev/null
+@@ -1,60 +0,0 @@
+-package com.example.ui.screen.components
+-
+-import androidx.compose.foundation.horizontalScroll
+-import androidx.compose.foundation.layout.Arrangement
+-import androidx.compose.foundation.layout.Row
+-import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.rememberScrollState
+-import androidx.compose.material3.FilterChip
+-import androidx.compose.material3.FilterChipDefaults
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.platform.testTag
+-import androidx.compose.ui.unit.dp
+-import com.example.data.model.PlaceCategory
+-
+-@Composable
+-fun CategoryFilterChips(
+-    selectedCategory: PlaceCategory,
+-    onCategorySelected: (PlaceCategory) -> Unit,
+-    modifier: Modifier = Modifier
+-) {
+-    val scrollState = rememberScrollState()
+-
+-    Row(
+-        modifier = modifier
+-            .fillMaxWidth()
+-            .horizontalScroll(scrollState)
+-            .padding(horizontal = 16.dp, vertical = 4.dp),
+-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+-    ) {
+-        PlaceCategory.entries.forEach { category ->
+-            val isSelected = selectedCategory == category
+-
+-            FilterChip(
+-                selected = isSelected,
+-                onClick = { onCategorySelected(category) },
+-                label = { Text(text = category.displayName) },
+-                leadingIcon = {
+-                    Icon(
+-                        imageVector = category.getIcon(),
+-                        contentDescription = category.displayName,
+-                        modifier = Modifier.size(18.dp)
+-                    )
+-                },
+-                colors = FilterChipDefaults.filterChipColors(
+-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+-                    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
+-                ),
+-                elevation = FilterChipDefaults.filterChipElevation(elevation = 2.dp),
+-                modifier = Modifier.testTag("filter_chip_${category.id}")
+-            )
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/example/ui/screen/components/InteractiveMapCanvas.kt b/app/src/main/java/com/example/ui/screen/components/InteractiveMapCanvas.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/components/InteractiveMapCanvas.kt
++++ /dev/null
+@@ -1,415 +0,0 @@
+-package com.example.ui.screen.components
+-
+-import androidx.compose.animation.core.FastOutSlowInEasing
+-import androidx.compose.animation.core.RepeatMode
+-import androidx.compose.animation.core.animateFloat
+-import androidx.compose.animation.core.infiniteRepeatable
+-import androidx.compose.animation.core.rememberInfiniteTransition
+-import androidx.compose.animation.core.tween
+-import androidx.compose.foundation.Canvas
+-import androidx.compose.foundation.gestures.detectDragGestures
+-import androidx.compose.foundation.gestures.detectTapGestures
+-import androidx.compose.foundation.layout.BoxWithConstraints
+-import androidx.compose.foundation.layout.fillMaxSize
+-import androidx.compose.runtime.Composable
+-import androidx.compose.runtime.getValue
+-import androidx.compose.runtime.remember
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.geometry.CornerRadius
+-import androidx.compose.ui.geometry.Offset
+-import androidx.compose.ui.geometry.Size
+-import androidx.compose.ui.graphics.Brush
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.graphics.Path
+-import androidx.compose.ui.graphics.PathEffect
+-import androidx.compose.ui.graphics.StrokeCap
+-import androidx.compose.ui.graphics.StrokeJoin
+-import androidx.compose.ui.graphics.drawscope.DrawScope
+-import androidx.compose.ui.graphics.drawscope.Stroke
+-import androidx.compose.ui.input.pointer.pointerInput
+-import androidx.compose.ui.platform.testTag
+-import com.example.data.model.LatLng
+-import com.example.data.model.MapLayerType
+-import com.example.data.model.MapViewport
+-import com.example.data.model.Place
+-import com.example.data.model.PlaceCategory
+-import com.example.data.model.RouteInfo
+-import kotlin.math.hypot
+-
+-@Composable
+-fun InteractiveMapCanvas(
+-    viewport: MapViewport,
+-    places: List<Place>,
+-    selectedPlace: Place?,
+-    activeRoute: RouteInfo?,
+-    userLocation: LatLng,
+-    onPlaceSelected: (Place) -> Unit,
+-    onPan: (deltaLat: Double, deltaLng: Double) -> Unit,
+-    modifier: Modifier = Modifier
+-) {
+-    // Pulse animation for user GPS location
+-    val infiniteTransition = rememberInfiniteTransition(label = "pulse_transition")
+-    val pulseRadius by infiniteTransition.animateFloat(
+-        initialValue = 12f,
+-        targetValue = 38f,
+-        animationSpec = infiniteRepeatable(
+-            animation = tween(1400, easing = FastOutSlowInEasing),
+-            repeatMode = RepeatMode.Restart
+-        ),
+-        label = "pulse_radius"
+-    )
+-    val pulseAlpha by infiniteTransition.animateFloat(
+-        initialValue = 0.7f,
+-        targetValue = 0.0f,
+-        animationSpec = infiniteRepeatable(
+-            animation = tween(1400, easing = FastOutSlowInEasing),
+-            repeatMode = RepeatMode.Restart
+-        ),
+-        label = "pulse_alpha"
+-    )
+-
+-    BoxWithConstraints(
+-        modifier = modifier
+-            .fillMaxSize()
+-            .testTag("interactive_map_canvas")
+-            .pointerInput(viewport.zoomLevel) {
+-                detectDragGestures { _, dragAmount ->
+-                    // Sensitivity scaling by zoom level
+-                    val scaleFactor = 0.000035 / (viewport.zoomLevel / 14f)
+-                    val deltaLat = dragAmount.y * scaleFactor
+-                    val deltaLng = -dragAmount.x * scaleFactor
+-                    onPan(deltaLat, deltaLng)
+-                }
+-            }
+-    ) {
+-        val width = constraints.maxWidth.toFloat()
+-        val height = constraints.maxHeight.toFloat()
+-
+-        // Helper to convert lat/lng to canvas offset coordinates
+-        fun latLngToScreen(point: LatLng): Offset {
+-            val dLng = point.longitude - viewport.center.longitude
+-            val dLat = point.latitude - viewport.center.latitude
+-            val pixelsPerDegree = 4500f * (viewport.zoomLevel / 14f)
+-            val x = (width / 2f) + (dLng * pixelsPerDegree).toFloat()
+-            val y = (height / 2f) - (dLat * pixelsPerDegree).toFloat()
+-            return Offset(x, y)
+-        }
+-
+-        Canvas(
+-            modifier = Modifier
+-                .fillMaxSize()
+-                .pointerInput(places, viewport) {
+-                    detectTapGestures { tapOffset ->
+-                        // Check if tap hit any place marker
+-                        var clickedPlace: Place? = null
+-                        for (place in places) {
+-                            val markerCenter = latLngToScreen(LatLng(place.latitude, place.longitude))
+-                            val hitRadius = 40f
+-                            val dist = hypot(tapOffset.x - markerCenter.x, tapOffset.y - markerCenter.y)
+-                            if (dist <= hitRadius) {
+-                                clickedPlace = place
+-                                break
+-                            }
+-                        }
+-                        if (clickedPlace != null) {
+-                            onPlaceSelected(clickedPlace)
+-                        }
+-                    }
+-                }
+-        ) {
+-            // 1. Draw Map Base Background
+-            drawMapBase(viewport.layerType)
+-
+-            // 2. Draw Geographic Features (Rivers, Parks, Road Grid)
+-            drawGeography(viewport.layerType, width, height, viewport)
+-
+-            // 3. Draw Route Polyline if Active
+-            if (activeRoute != null) {
+-                drawActiveRoute(activeRoute, ::latLngToScreen)
+-            }
+-
+-            // 4. Draw Place Markers
+-            places.forEach { place ->
+-                val isSelected = place.id == selectedPlace?.id
+-                val screenPos = latLngToScreen(LatLng(place.latitude, place.longitude))
+-                // Only render if roughly within screen bounds
+-                if (screenPos.x in -100f..(width + 100f) && screenPos.y in -100f..(height + 100f)) {
+-                    drawPlaceMarker(
+-                        place = place,
+-                        center = screenPos,
+-                        isSelected = isSelected,
+-                        layerType = viewport.layerType
+-                    )
+-                }
+-            }
+-
+-            // 5. Draw User GPS Location with Pulse
+-            val userPos = latLngToScreen(userLocation)
+-            drawUserLocation(userPos, pulseRadius, pulseAlpha)
+-        }
+-    }
+-}
+-
+-private fun DrawScope.drawMapBase(layerType: MapLayerType) {
+-    val bgColor = when (layerType) {
+-        MapLayerType.STANDARD -> Color(0xFFF3F4F6)
+-        MapLayerType.SATELLITE -> Color(0xFF1B242C)
+-        MapLayerType.TRAFFIC -> Color(0xFFEFEFEF)
+-    }
+-    drawRect(color = bgColor)
+-}
+-
+-private fun DrawScope.drawGeography(
+-    layerType: MapLayerType,
+-    width: Float,
+-    height: Float,
+-    viewport: MapViewport
+-) {
+-    // Water Color
+-    val waterColor = when (layerType) {
+-        MapLayerType.STANDARD -> Color(0xFFC7E2F8)
+-        MapLayerType.SATELLITE -> Color(0xFF0F1E2E)
+-        MapLayerType.TRAFFIC -> Color(0xFFB9D8F2)
+-    }
+-    // Park Green Color
+-    val parkColor = when (layerType) {
+-        MapLayerType.STANDARD -> Color(0xFFDCF0DF)
+-        MapLayerType.SATELLITE -> Color(0xFF17291B)
+-        MapLayerType.TRAFFIC -> Color(0xFFE2F3E4)
+-    }
+-    // Road Color
+-    val roadMainColor = when (layerType) {
+-        MapLayerType.STANDARD -> Color(0xFFFFFFFF)
+-        MapLayerType.SATELLITE -> Color(0xFF3B4856)
+-        MapLayerType.TRAFFIC -> Color(0xFFFFFFFF)
+-    }
+-    val roadSecondaryColor = when (layerType) {
+-        MapLayerType.STANDARD -> Color(0xFFE7E9ED)
+-        MapLayerType.SATELLITE -> Color(0xFF2C3742)
+-        MapLayerType.TRAFFIC -> Color(0xFFE0E3E8)
+-    }
+-
+-    // 1. Draw River (Saigon River S-Curve effect)
+-    val riverPath = Path().apply {
+-        moveTo(width * 0.75f, 0f)
+-        cubicTo(
+-            width * 0.9f, height * 0.25f,
+-            width * 0.65f, height * 0.6f,
+-            width * 0.85f, height
+-        )
+-    }
+-    drawPath(
+-        path = riverPath,
+-        color = waterColor,
+-        style = Stroke(width = 65f * (viewport.zoomLevel / 14f), cap = StrokeCap.Round)
+-    )
+-
+-    // 2. Draw Parks (Tao Dan Park, 23/9 Park areas)
+-    drawRoundRect(
+-        color = parkColor,
+-        topLeft = Offset(width * 0.12f, height * 0.35f),
+-        size = Size(width * 0.28f, height * 0.18f),
+-        cornerRadius = CornerRadius(24f, 24f)
+-    )
+-    drawRoundRect(
+-        color = parkColor,
+-        topLeft = Offset(width * 0.20f, height * 0.68f),
+-        size = Size(width * 0.45f, height * 0.08f),
+-        cornerRadius = CornerRadius(20f, 20f)
+-    )
+-
+-    // 3. Draw Road Grid (City avenues & streets)
+-    val gridStep = 80f * (viewport.zoomLevel / 14f)
+-    // Horizontal streets
+-    var y = 40f
+-    while (y < height) {
+-        drawLine(
+-            color = roadSecondaryColor,
+-            start = Offset(0f, y),
+-            end = Offset(width, y),
+-            strokeWidth = 6f
+-        )
+-        y += gridStep
+-    }
+-    // Vertical avenues
+-    var x = 30f
+-    while (x < width) {
+-        drawLine(
+-            color = roadSecondaryColor,
+-            start = Offset(x, 0f),
+-            end = Offset(x, height),
+-            strokeWidth = 6f
+-        )
+-        x += gridStep
+-    }
+-
+-    // Major Arterial Highways (Thick white/yellow roads)
+-    drawLine(
+-        color = roadMainColor,
+-        start = Offset(0f, height * 0.48f),
+-        end = Offset(width, height * 0.52f),
+-        strokeWidth = 14f
+-    )
+-    drawLine(
+-        color = roadMainColor,
+-        start = Offset(width * 0.45f, 0f),
+-        end = Offset(width * 0.40f, height),
+-        strokeWidth = 14f
+-    )
+-    drawLine(
+-        color = roadMainColor,
+-        start = Offset(0f, height * 0.2f),
+-        end = Offset(width * 0.75f, height * 0.95f),
+-        strokeWidth = 12f
+-    )
+-
+-    // If Traffic Layer is active, draw live congestion overlays
+-    if (layerType == MapLayerType.TRAFFIC) {
+-        // Green fast flow
+-        drawLine(
+-            color = Color(0xFF4CAF50),
+-            start = Offset(0f, height * 0.48f),
+-            end = Offset(width * 0.45f, height * 0.50f),
+-            strokeWidth = 6f
+-        )
+-        // Amber moderate
+-        drawLine(
+-            color = Color(0xFFFF9800),
+-            start = Offset(width * 0.45f, height * 0.50f),
+-            end = Offset(width * 0.70f, height * 0.51f),
+-            strokeWidth = 6f
+-        )
+-        // Red heavy traffic
+-        drawLine(
+-            color = Color(0xFFE53935),
+-            start = Offset(width * 0.45f, height * 0.15f),
+-            end = Offset(width * 0.43f, height * 0.45f),
+-            strokeWidth = 6f
+-        )
+-    }
+-}
+-
+-private fun DrawScope.drawActiveRoute(
+-    route: RouteInfo,
+-    latLngToScreen: (LatLng) -> Offset
+-) {
+-    if (route.waypoints.size < 2) return
+-
+-    val routePath = Path()
+-    val startOffset = latLngToScreen(route.waypoints.first())
+-    routePath.moveTo(startOffset.x, startOffset.y)
+-
+-    for (i in 1 until route.waypoints.size) {
+-        val pt = latLngToScreen(route.waypoints[i])
+-        routePath.lineTo(pt.x, pt.y)
+-    }
+-
+-    // Outer glow / shadow
+-    drawPath(
+-        path = routePath,
+-        color = Color(0x330052CC),
+-        style = Stroke(width = 18f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+-    )
+-
+-    // Main route line (Royal Blue with gradient effect)
+-    drawPath(
+-        path = routePath,
+-        color = Color(0xFF2979FF),
+-        style = Stroke(width = 10f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+-    )
+-
+-    // Destination Pin Flag
+-    val destOffset = latLngToScreen(route.destination)
+-    drawCircle(color = Color(0xFF1E88E5), radius = 10f, center = destOffset)
+-    drawCircle(color = Color.White, radius = 5f, center = destOffset)
+-}
+-
+-private fun DrawScope.drawPlaceMarker(
+-    place: Place,
+-    center: Offset,
+-    isSelected: Boolean,
+-    layerType: MapLayerType
+-) {
+-    val categoryColor = when (place.category) {
+-        PlaceCategory.RESTAURANT -> Color(0xFFE53935) // Red
+-        PlaceCategory.CAFE -> Color(0xFF8D6E63)       // Coffee Brown
+-        PlaceCategory.GAS -> Color(0xFFFF9800)        // Orange
+-        PlaceCategory.HOTEL -> Color(0xFF7E57C2)      // Purple
+-        PlaceCategory.ATTRACTION -> Color(0xFF00897B) // Teal
+-        PlaceCategory.ALL -> Color(0xFF1976D2)        // Blue
+-    }
+-
+-    val baseRadius = if (isSelected) 22f else 16f
+-
+-    // Marker drop shadow
+-    drawCircle(
+-        color = Color(0x33000000),
+-        radius = baseRadius + 4f,
+-        center = Offset(center.x, center.y + 3f)
+-    )
+-
+-    // Outer white halo
+-    drawCircle(
+-        color = Color.White,
+-        radius = baseRadius + 2f,
+-        center = center
+-    )
+-
+-    // Main Colored Marker Body
+-    drawCircle(
+-        color = categoryColor,
+-        radius = baseRadius,
+-        center = center
+-    )
+-
+-    // Inner White Dot / Icon indicator
+-    drawCircle(
+-        color = Color.White,
+-        radius = baseRadius * 0.42f,
+-        center = center
+-    )
+-
+-    // If selected, draw animated pulse ring around it
+-    if (isSelected) {
+-        drawCircle(
+-            color = categoryColor.copy(alpha = 0.35f),
+-            radius = baseRadius + 14f,
+-            center = center,
+-            style = Stroke(width = 3f)
+-        )
+-    }
+-}
+-
+-private fun DrawScope.drawUserLocation(
+-    center: Offset,
+-    pulseRadius: Float,
+-    pulseAlpha: Float
+-) {
+-    // 1. Animated radar wave
+-    drawCircle(
+-        color = Color(0xFF007AFF).copy(alpha = pulseAlpha),
+-        radius = pulseRadius,
+-        center = center
+-    )
+-
+-    // 2. Accuracy circle shadow
+-    drawCircle(
+-        color = Color(0x33007AFF),
+-        radius = 18f,
+-        center = center
+-    )
+-
+-    // 3. Crisp white border
+-    drawCircle(
+-        color = Color.White,
+-        radius = 10f,
+-        center = center
+-    )
+-
+-    // 4. Solid Blue Location Dot
+-    drawCircle(
+-        color = Color(0xFF007AFF),
+-        radius = 7.5f,
+-        center = center
+-    )
+-}
+diff --git a/app/src/main/java/com/example/ui/screen/components/MapControlsOverlay.kt b/app/src/main/java/com/example/ui/screen/components/MapControlsOverlay.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/components/MapControlsOverlay.kt
++++ /dev/null
+@@ -1,112 +0,0 @@
+-package com.example.ui.screen.components
+-
+-import androidx.compose.foundation.layout.Arrangement
+-import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.shape.CircleShape
+-import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.filled.Add
+-import androidx.compose.material.icons.filled.Explore
+-import androidx.compose.material.icons.filled.Layers
+-import androidx.compose.material.icons.filled.MyLocation
+-import androidx.compose.material.icons.filled.Remove
+-import androidx.compose.material3.FloatingActionButton
+-import androidx.compose.material3.FloatingActionButtonDefaults
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.SmallFloatingActionButton
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.draw.shadow
+-import androidx.compose.ui.platform.testTag
+-import androidx.compose.ui.res.stringResource
+-import androidx.compose.ui.unit.dp
+-import com.example.R
+-
+-@Composable
+-fun MapControlsOverlay(
+-    onCenterMyLocation: () -> Unit,
+-    onToggleLayers: () -> Unit,
+-    onZoomIn: () -> Unit,
+-    onZoomOut: () -> Unit,
+-    modifier: Modifier = Modifier
+-) {
+-    Column(
+-        modifier = modifier,
+-        verticalArrangement = Arrangement.spacedBy(10.dp),
+-        horizontalAlignment = Alignment.End
+-    ) {
+-        // Layers Switch Button
+-        SmallFloatingActionButton(
+-            onClick = onToggleLayers,
+-            containerColor = MaterialTheme.colorScheme.surface,
+-            contentColor = MaterialTheme.colorScheme.onSurface,
+-            shape = CircleShape,
+-            modifier = Modifier
+-                .size(46.dp)
+-                .shadow(4.dp, CircleShape)
+-                .testTag("map_layers_button")
+-        ) {
+-            Icon(
+-                imageVector = Icons.Default.Layers,
+-                contentDescription = stringResource(R.string.map_layers),
+-                modifier = Modifier.size(22.dp)
+-            )
+-        }
+-
+-        // Center on My Location Button
+-        FloatingActionButton(
+-            onClick = onCenterMyLocation,
+-            containerColor = MaterialTheme.colorScheme.surface,
+-            contentColor = MaterialTheme.colorScheme.primary,
+-            shape = CircleShape,
+-            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+-            modifier = Modifier
+-                .size(52.dp)
+-                .testTag("my_location_button")
+-        ) {
+-            Icon(
+-                imageVector = Icons.Default.MyLocation,
+-                contentDescription = stringResource(R.string.my_location),
+-                modifier = Modifier.size(24.dp)
+-            )
+-        }
+-
+-        // Zoom In Button (+)
+-        SmallFloatingActionButton(
+-            onClick = onZoomIn,
+-            containerColor = MaterialTheme.colorScheme.surface,
+-            contentColor = MaterialTheme.colorScheme.onSurface,
+-            shape = CircleShape,
+-            modifier = Modifier
+-                .size(42.dp)
+-                .shadow(3.dp, CircleShape)
+-                .testTag("zoom_in_button")
+-        ) {
+-            Icon(
+-                imageVector = Icons.Default.Add,
+-                contentDescription = "Phóng to",
+-                modifier = Modifier.size(20.dp)
+-            )
+-        }
+-
+-        // Zoom Out Button (-)
+-        SmallFloatingActionButton(
+-            onClick = onZoomOut,
+-            containerColor = MaterialTheme.colorScheme.surface,
+-            contentColor = MaterialTheme.colorScheme.onSurface,
+-            shape = CircleShape,
+-            modifier = Modifier
+-                .size(42.dp)
+-                .shadow(3.dp, CircleShape)
+-                .testTag("zoom_out_button")
+-        ) {
+-            Icon(
+-                imageVector = Icons.Default.Remove,
+-                contentDescription = "Thu nhỏ",
+-                modifier = Modifier.size(20.dp)
+-            )
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/example/ui/screen/components/MapLayersSheet.kt b/app/src/main/java/com/example/ui/screen/components/MapLayersSheet.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/components/MapLayersSheet.kt
++++ /dev/null
+@@ -1,176 +0,0 @@
+-package com.example.ui.screen.components
+-
+-import androidx.compose.foundation.background
+-import androidx.compose.foundation.clickable
+-import androidx.compose.foundation.layout.Arrangement
+-import androidx.compose.foundation.layout.Box
+-import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.Row
+-import androidx.compose.foundation.layout.Spacer
+-import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.height
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.layout.width
+-import androidx.compose.foundation.shape.CircleShape
+-import androidx.compose.foundation.shape.RoundedCornerShape
+-import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.filled.Check
+-import androidx.compose.material.icons.filled.Close
+-import androidx.compose.material.icons.filled.DarkMode
+-import androidx.compose.material.icons.filled.Map
+-import androidx.compose.material.icons.filled.Traffic
+-import androidx.compose.material3.Card
+-import androidx.compose.material3.CardDefaults
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.IconButton
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.Surface
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.draw.clip
+-import androidx.compose.ui.draw.shadow
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.graphics.vector.ImageVector
+-import androidx.compose.ui.platform.testTag
+-import androidx.compose.ui.res.stringResource
+-import androidx.compose.ui.text.font.FontWeight
+-import androidx.compose.ui.unit.dp
+-import androidx.compose.ui.unit.sp
+-import com.example.R
+-import com.example.data.model.MapLayerType
+-
+-@Composable
+-fun MapLayersSheet(
+-    currentLayer: MapLayerType,
+-    onLayerSelected: (MapLayerType) -> Unit,
+-    onDismiss: () -> Unit,
+-    modifier: Modifier = Modifier
+-) {
+-    Card(
+-        modifier = modifier
+-            .fillMaxWidth()
+-            .padding(horizontal = 16.dp, vertical = 12.dp)
+-            .shadow(elevation = 16.dp, shape = RoundedCornerShape(24.dp))
+-            .testTag("map_layers_sheet"),
+-        shape = RoundedCornerShape(24.dp),
+-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+-    ) {
+-        Column(
+-            modifier = Modifier
+-                .fillMaxWidth()
+-                .padding(20.dp)
+-        ) {
+-            Row(
+-                modifier = Modifier.fillMaxWidth(),
+-                horizontalArrangement = Arrangement.SpaceBetween,
+-                verticalAlignment = Alignment.CenterVertically
+-            ) {
+-                Text(
+-                    text = stringResource(R.string.map_layers),
+-                    style = MaterialTheme.typography.titleLarge.copy(
+-                        fontWeight = FontWeight.Bold,
+-                        fontSize = 18.sp
+-                    )
+-                )
+-                IconButton(
+-                    onClick = onDismiss,
+-                    modifier = Modifier.size(32.dp)
+-                ) {
+-                    Icon(
+-                        imageVector = Icons.Default.Close,
+-                        contentDescription = "Đóng",
+-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+-                    )
+-                }
+-            }
+-
+-            Spacer(modifier = Modifier.height(16.dp))
+-
+-            Row(
+-                modifier = Modifier.fillMaxWidth(),
+-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+-            ) {
+-                LayerOptionItem(
+-                    title = stringResource(R.string.standard_layer),
+-                    icon = Icons.Default.Map,
+-                    isSelected = currentLayer == MapLayerType.STANDARD,
+-                    onClick = { onLayerSelected(MapLayerType.STANDARD) },
+-                    modifier = Modifier.weight(1f)
+-                )
+-
+-                LayerOptionItem(
+-                    title = stringResource(R.string.satellite_layer),
+-                    icon = Icons.Default.DarkMode,
+-                    isSelected = currentLayer == MapLayerType.SATELLITE,
+-                    onClick = { onLayerSelected(MapLayerType.SATELLITE) },
+-                    modifier = Modifier.weight(1f)
+-                )
+-
+-                LayerOptionItem(
+-                    title = stringResource(R.string.traffic_layer),
+-                    icon = Icons.Default.Traffic,
+-                    isSelected = currentLayer == MapLayerType.TRAFFIC,
+-                    onClick = { onLayerSelected(MapLayerType.TRAFFIC) },
+-                    modifier = Modifier.weight(1f)
+-                )
+-            }
+-        }
+-    }
+-}
+-
+-@Composable
+-private fun LayerOptionItem(
+-    title: String,
+-    icon: ImageVector,
+-    isSelected: Boolean,
+-    onClick: () -> Unit,
+-    modifier: Modifier = Modifier
+-) {
+-    val borderColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+-    val containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+-
+-    Surface(
+-        modifier = modifier
+-            .clip(RoundedCornerShape(16.dp))
+-            .clickable(onClick = onClick)
+-            .testTag("layer_option_${title}"),
+-        shape = RoundedCornerShape(16.dp),
+-        color = containerColor,
+-        border = androidx.compose.foundation.BorderStroke(2.dp, borderColor)
+-    ) {
+-        Column(
+-            modifier = Modifier.padding(12.dp),
+-            horizontalAlignment = Alignment.CenterHorizontally
+-        ) {
+-            Box(
+-                modifier = Modifier
+-                    .size(44.dp)
+-                    .clip(CircleShape)
+-                    .background(
+-                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+-                    ),
+-                contentAlignment = Alignment.Center
+-            ) {
+-                Icon(
+-                    imageVector = icon,
+-                    contentDescription = title,
+-                    tint = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+-                    modifier = Modifier.size(24.dp)
+-                )
+-            }
+-
+-            Spacer(modifier = Modifier.height(8.dp))
+-
+-            Text(
+-                text = title,
+-                style = MaterialTheme.typography.labelMedium.copy(
+-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+-                ),
+-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+-            )
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/example/ui/screen/components/MapSearchBar.kt b/app/src/main/java/com/example/ui/screen/components/MapSearchBar.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/components/MapSearchBar.kt
++++ /dev/null
+@@ -1,170 +0,0 @@
+-package com.example.ui.screen.components
+-
+-import androidx.compose.animation.AnimatedVisibility
+-import androidx.compose.animation.fadeIn
+-import androidx.compose.animation.fadeOut
+-import androidx.compose.foundation.background
+-import androidx.compose.foundation.layout.Box
+-import androidx.compose.foundation.layout.Row
+-import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.height
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.shape.CircleShape
+-import androidx.compose.foundation.shape.RoundedCornerShape
+-import androidx.compose.foundation.text.BasicTextField
+-import androidx.compose.foundation.text.KeyboardActions
+-import androidx.compose.foundation.text.KeyboardOptions
+-import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.filled.Bookmark
+-import androidx.compose.material.icons.filled.Close
+-import androidx.compose.material.icons.filled.DeveloperMode
+-import androidx.compose.material.icons.filled.Search
+-import androidx.compose.material3.Card
+-import androidx.compose.material3.CardDefaults
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.IconButton
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.Surface
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.draw.clip
+-import androidx.compose.ui.draw.shadow
+-import androidx.compose.ui.graphics.SolidColor
+-import androidx.compose.ui.platform.LocalFocusManager
+-import androidx.compose.ui.platform.testTag
+-import androidx.compose.ui.res.stringResource
+-import androidx.compose.ui.text.TextStyle
+-import androidx.compose.ui.text.input.ImeAction
+-import androidx.compose.ui.unit.dp
+-import androidx.compose.ui.unit.sp
+-import com.example.R
+-
+-@Composable
+-fun MapSearchBar(
+-    query: String,
+-    onQueryChange: (String) -> Unit,
+-    onOpenApiConfig: () -> Unit,
+-    onOpenSavedPlaces: () -> Unit,
+-    savedCount: Int,
+-    modifier: Modifier = Modifier
+-) {
+-    val focusManager = LocalFocusManager.current
+-
+-    Surface(
+-        modifier = modifier
+-            .fillMaxWidth()
+-            .padding(horizontal = 16.dp, vertical = 8.dp)
+-            .shadow(elevation = 6.dp, shape = RoundedCornerShape(28.dp))
+-            .testTag("map_search_bar"),
+-        shape = RoundedCornerShape(28.dp),
+-        color = MaterialTheme.colorScheme.surface,
+-        tonalElevation = 4.dp
+-    ) {
+-        Row(
+-            modifier = Modifier
+-                .fillMaxWidth()
+-                .height(56.dp)
+-                .padding(horizontal = 12.dp),
+-            verticalAlignment = Alignment.CenterVertically
+-        ) {
+-            Icon(
+-                imageVector = Icons.Default.Search,
+-                contentDescription = "Tìm kiếm",
+-                tint = MaterialTheme.colorScheme.primary,
+-                modifier = Modifier
+-                    .size(24.dp)
+-                    .testTag("search_icon")
+-            )
+-
+-            Box(
+-                modifier = Modifier
+-                    .weight(1f)
+-                    .padding(horizontal = 12.dp)
+-            ) {
+-                if (query.isEmpty()) {
+-                    Text(
+-                        text = stringResource(R.string.search_hint),
+-                        style = MaterialTheme.typography.bodyLarge.copy(
+-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+-                            fontSize = 15.sp
+-                        )
+-                    )
+-                }
+-                BasicTextField(
+-                    value = query,
+-                    onValueChange = onQueryChange,
+-                    singleLine = true,
+-                    textStyle = TextStyle(
+-                        color = MaterialTheme.colorScheme.onSurface,
+-                        fontSize = 15.sp
+-                    ),
+-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+-                    keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+-                    modifier = Modifier
+-                        .fillMaxWidth()
+-                        .testTag("search_text_input")
+-                )
+-            }
+-
+-            AnimatedVisibility(
+-                visible = query.isNotEmpty(),
+-                enter = fadeIn(),
+-                exit = fadeOut()
+-            ) {
+-                IconButton(
+-                    onClick = { onQueryChange("") },
+-                    modifier = Modifier.size(36.dp).testTag("clear_search_button")
+-                ) {
+-                    Icon(
+-                        imageVector = Icons.Default.Close,
+-                        contentDescription = "Xóa tìm kiếm",
+-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+-                    )
+-                }
+-            }
+-
+-            // Saved Places Shortcut
+-            IconButton(
+-                onClick = onOpenSavedPlaces,
+-                modifier = Modifier
+-                    .size(40.dp)
+-                    .testTag("saved_places_button")
+-            ) {
+-                Box {
+-                    Icon(
+-                        imageVector = Icons.Default.Bookmark,
+-                        contentDescription = "Địa điểm đã lưu",
+-                        tint = if (savedCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+-                    )
+-                    if (savedCount > 0) {
+-                        Box(
+-                            modifier = Modifier
+-                                .size(8.dp)
+-                                .clip(CircleShape)
+-                                .background(MaterialTheme.colorScheme.error)
+-                                .align(Alignment.TopEnd)
+-                        )
+-                    }
+-                }
+-            }
+-
+-            // API Config Button
+-            IconButton(
+-                onClick = onOpenApiConfig,
+-                modifier = Modifier
+-                    .size(40.dp)
+-                    .testTag("api_config_button")
+-            ) {
+-                Icon(
+-                    imageVector = Icons.Default.DeveloperMode,
+-                    contentDescription = "Cấu hình API",
+-                    tint = MaterialTheme.colorScheme.primary
+-                )
+-            }
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/example/ui/screen/components/NavigationRouteCard.kt b/app/src/main/java/com/example/ui/screen/components/NavigationRouteCard.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/components/NavigationRouteCard.kt
++++ /dev/null
+@@ -1,153 +0,0 @@
+-package com.example.ui.screen.components
+-
+-import androidx.compose.foundation.background
+-import androidx.compose.foundation.layout.Arrangement
+-import androidx.compose.foundation.layout.Box
+-import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.Row
+-import androidx.compose.foundation.layout.Spacer
+-import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.height
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.layout.width
+-import androidx.compose.foundation.shape.CircleShape
+-import androidx.compose.foundation.shape.RoundedCornerShape
+-import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.filled.Close
+-import androidx.compose.material.icons.filled.DirectionsCar
+-import androidx.compose.material.icons.filled.TurnRight
+-import androidx.compose.material3.Card
+-import androidx.compose.material3.CardDefaults
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.IconButton
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.Surface
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.draw.clip
+-import androidx.compose.ui.draw.shadow
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.platform.testTag
+-import androidx.compose.ui.res.stringResource
+-import androidx.compose.ui.text.font.FontWeight
+-import androidx.compose.ui.unit.dp
+-import androidx.compose.ui.unit.sp
+-import com.example.R
+-import com.example.data.model.RouteInfo
+-
+-@Composable
+-fun NavigationRouteCard(
+-    route: RouteInfo,
+-    onStopNavigation: () -> Unit,
+-    modifier: Modifier = Modifier
+-) {
+-    Card(
+-        modifier = modifier
+-            .fillMaxWidth()
+-            .padding(horizontal = 16.dp, vertical = 8.dp)
+-            .shadow(elevation = 8.dp, shape = RoundedCornerShape(20.dp))
+-            .testTag("navigation_route_card"),
+-        shape = RoundedCornerShape(20.dp),
+-        colors = CardDefaults.cardColors(
+-            containerColor = Color(0xFF1B2E4B)
+-        )
+-    ) {
+-        Column(
+-            modifier = Modifier
+-                .fillMaxWidth()
+-                .padding(16.dp)
+-        ) {
+-            Row(
+-                modifier = Modifier.fillMaxWidth(),
+-                horizontalArrangement = Arrangement.SpaceBetween,
+-                verticalAlignment = Alignment.CenterVertically
+-            ) {
+-                Row(
+-                    verticalAlignment = Alignment.CenterVertically,
+-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+-                ) {
+-                    Box(
+-                        modifier = Modifier
+-                            .size(42.dp)
+-                            .clip(CircleShape)
+-                            .background(Color(0xFF2979FF)),
+-                        contentAlignment = Alignment.Center
+-                    ) {
+-                        Icon(
+-                            imageVector = Icons.Default.TurnRight,
+-                            contentDescription = "Chỉ dẫn rẽ",
+-                            tint = Color.White,
+-                            modifier = Modifier.size(24.dp)
+-                        )
+-                    }
+-
+-                    Column {
+-                        Text(
+-                            text = "${route.durationMinutes} phút",
+-                            style = MaterialTheme.typography.titleLarge.copy(
+-                                fontWeight = FontWeight.Bold,
+-                                color = Color.White,
+-                                fontSize = 22.sp
+-                            )
+-                        )
+-                        Text(
+-                            text = "${route.distanceKm} km • ${route.destinationName}",
+-                            style = MaterialTheme.typography.bodyMedium.copy(
+-                                color = Color(0xFFB0C4DE),
+-                                fontSize = 13.sp
+-                            )
+-                        )
+-                    }
+-                }
+-
+-                IconButton(
+-                    onClick = onStopNavigation,
+-                    modifier = Modifier
+-                        .size(36.dp)
+-                        .clip(CircleShape)
+-                        .background(Color(0x33FFFFFF))
+-                        .testTag("stop_navigation_button")
+-                ) {
+-                    Icon(
+-                        imageVector = Icons.Default.Close,
+-                        contentDescription = stringResource(R.string.stop_navigation),
+-                        tint = Color.White
+-                    )
+-                }
+-            }
+-
+-            Spacer(modifier = Modifier.height(10.dp))
+-
+-            // Step instruction banner
+-            Surface(
+-                shape = RoundedCornerShape(12.dp),
+-                color = Color(0x22FFFFFF),
+-                modifier = Modifier.fillMaxWidth()
+-            ) {
+-                Row(
+-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+-                    verticalAlignment = Alignment.CenterVertically
+-                ) {
+-                    Icon(
+-                        imageVector = Icons.Default.DirectionsCar,
+-                        contentDescription = null,
+-                        tint = Color(0xFF90CAF9),
+-                        modifier = Modifier.size(16.dp)
+-                    )
+-                    Spacer(modifier = Modifier.width(8.dp))
+-                    Text(
+-                        text = route.steps.firstOrNull()?.instruction ?: "Tiếp tục đi thẳng theo lộ trình",
+-                        style = MaterialTheme.typography.bodyMedium.copy(
+-                            color = Color.White,
+-                            fontWeight = FontWeight.Medium,
+-                            fontSize = 13.sp
+-                        )
+-                    )
+-                }
+-            }
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/example/ui/screen/components/PlaceDetailBottomSheet.kt b/app/src/main/java/com/example/ui/screen/components/PlaceDetailBottomSheet.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/components/PlaceDetailBottomSheet.kt
++++ /dev/null
+@@ -1,294 +0,0 @@
+-package com.example.ui.screen.components
+-
+-import androidx.compose.foundation.background
+-import androidx.compose.foundation.layout.Arrangement
+-import androidx.compose.foundation.layout.Box
+-import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.ExperimentalLayoutApi
+-import androidx.compose.foundation.layout.FlowRow
+-import androidx.compose.foundation.layout.Row
+-import androidx.compose.foundation.layout.Spacer
+-import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.height
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.layout.width
+-import androidx.compose.foundation.shape.CircleShape
+-import androidx.compose.foundation.shape.RoundedCornerShape
+-import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.filled.Bookmark
+-import androidx.compose.material.icons.filled.BookmarkBorder
+-import androidx.compose.material.icons.filled.Call
+-import androidx.compose.material.icons.filled.Close
+-import androidx.compose.material.icons.filled.Directions
+-import androidx.compose.material.icons.filled.Navigation
+-import androidx.compose.material.icons.filled.NearMe
+-import androidx.compose.material.icons.filled.Star
+-import androidx.compose.material3.Button
+-import androidx.compose.material3.ButtonDefaults
+-import androidx.compose.material3.Card
+-import androidx.compose.material3.CardDefaults
+-import androidx.compose.material3.FilledTonalButton
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.IconButton
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.OutlinedButton
+-import androidx.compose.material3.Surface
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.draw.clip
+-import androidx.compose.ui.draw.shadow
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.platform.testTag
+-import androidx.compose.ui.res.stringResource
+-import androidx.compose.ui.text.font.FontWeight
+-import androidx.compose.ui.unit.dp
+-import androidx.compose.ui.unit.sp
+-import com.example.R
+-import com.example.data.model.Place
+-
+-@OptIn(ExperimentalLayoutApi::class)
+-@Composable
+-fun PlaceDetailBottomSheet(
+-    place: Place,
+-    onStartNavigation: (Place) -> Unit,
+-    onToggleSave: (String) -> Unit,
+-    onDismiss: () -> Unit,
+-    modifier: Modifier = Modifier
+-) {
+-    Card(
+-        modifier = modifier
+-            .fillMaxWidth()
+-            .padding(horizontal = 16.dp, vertical = 8.dp)
+-            .shadow(elevation = 12.dp, shape = RoundedCornerShape(24.dp))
+-            .testTag("place_detail_bottom_sheet"),
+-        shape = RoundedCornerShape(24.dp),
+-        colors = CardDefaults.cardColors(
+-            containerColor = MaterialTheme.colorScheme.surface
+-        )
+-    ) {
+-        Column(
+-            modifier = Modifier
+-                .fillMaxWidth()
+-                .padding(20.dp)
+-        ) {
+-            // Drag handle pill at the top
+-            Box(
+-                modifier = Modifier
+-                    .size(width = 36.dp, height = 4.dp)
+-                    .clip(CircleShape)
+-                    .background(MaterialTheme.colorScheme.outlineVariant)
+-                    .align(Alignment.CenterHorizontally)
+-            )
+-
+-            Spacer(modifier = Modifier.height(12.dp))
+-
+-            // Header Row: Title & Close Button
+-            Row(
+-                modifier = Modifier.fillMaxWidth(),
+-                horizontalArrangement = Arrangement.SpaceBetween,
+-                verticalAlignment = Alignment.Top
+-            ) {
+-                Column(modifier = Modifier.weight(1f)) {
+-                    Text(
+-                        text = place.name,
+-                        style = MaterialTheme.typography.titleLarge.copy(
+-                            fontWeight = FontWeight.Bold,
+-                            fontSize = 20.sp
+-                        ),
+-                        color = MaterialTheme.colorScheme.onSurface
+-                    )
+-                    Spacer(modifier = Modifier.height(4.dp))
+-                    Text(
+-                        text = place.address,
+-                        style = MaterialTheme.typography.bodyMedium,
+-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+-                    )
+-                }
+-
+-                IconButton(
+-                    onClick = onDismiss,
+-                    modifier = Modifier.testTag("close_sheet_button")
+-                ) {
+-                    Icon(
+-                        imageVector = Icons.Default.Close,
+-                        contentDescription = "Đóng",
+-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+-                    )
+-                }
+-            }
+-
+-            Spacer(modifier = Modifier.height(10.dp))
+-
+-            // Rating & Stats Row
+-            Row(
+-                verticalAlignment = Alignment.CenterVertically,
+-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+-            ) {
+-                Surface(
+-                    shape = RoundedCornerShape(6.dp),
+-                    color = Color(0xFFFFF8E1)
+-                ) {
+-                    Row(
+-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+-                        verticalAlignment = Alignment.CenterVertically
+-                    ) {
+-                        Icon(
+-                            imageVector = Icons.Default.Star,
+-                            contentDescription = "Đánh giá",
+-                            tint = Color(0xFFFFA000),
+-                            modifier = Modifier.size(16.dp)
+-                        )
+-                        Spacer(modifier = Modifier.width(4.dp))
+-                        Text(
+-                            text = "${place.rating}",
+-                            fontWeight = FontWeight.Bold,
+-                            fontSize = 13.sp,
+-                            color = Color(0xFF5D4037)
+-                        )
+-                    }
+-                }
+-
+-                Text(
+-                    text = "(${place.reviewCount} đánh giá)",
+-                    style = MaterialTheme.typography.bodySmall,
+-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+-                )
+-
+-                Text(
+-                    text = "•",
+-                    color = MaterialTheme.colorScheme.outline
+-                )
+-
+-                Surface(
+-                    shape = RoundedCornerShape(6.dp),
+-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+-                ) {
+-                    Text(
+-                        text = "${place.distanceKm} km",
+-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+-                        style = MaterialTheme.typography.labelSmall,
+-                        color = MaterialTheme.colorScheme.primary,
+-                        fontWeight = FontWeight.SemiBold
+-                    )
+-                }
+-
+-                Text(
+-                    text = "•",
+-                    color = MaterialTheme.colorScheme.outline
+-                )
+-
+-                Text(
+-                    text = if (place.isOpen) "Đang mở cửa" else "Đã đóng cửa",
+-                    style = MaterialTheme.typography.labelMedium,
+-                    color = if (place.isOpen) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
+-                    fontWeight = FontWeight.Medium
+-                )
+-            }
+-
+-            Spacer(modifier = Modifier.height(10.dp))
+-
+-            // Description
+-            Text(
+-                text = place.description,
+-                style = MaterialTheme.typography.bodyMedium,
+-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+-                lineHeight = 20.sp
+-            )
+-
+-            // Tags
+-            if (place.tags.isNotEmpty()) {
+-                Spacer(modifier = Modifier.height(8.dp))
+-                FlowRow(
+-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+-                ) {
+-                    place.tags.forEach { tag ->
+-                        Surface(
+-                            shape = RoundedCornerShape(12.dp),
+-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+-                        ) {
+-                            Text(
+-                                text = "#$tag",
+-                                style = MaterialTheme.typography.labelSmall,
+-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+-                            )
+-                        }
+-                    }
+-                }
+-            }
+-
+-            Spacer(modifier = Modifier.height(18.dp))
+-
+-            // Action Buttons Row
+-            Row(
+-                modifier = Modifier.fillMaxWidth(),
+-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+-            ) {
+-                // Primary Navigate Button
+-                Button(
+-                    onClick = { onStartNavigation(place) },
+-                    modifier = Modifier
+-                        .weight(1.3f)
+-                        .height(48.dp)
+-                        .testTag("directions_button"),
+-                    shape = RoundedCornerShape(14.dp),
+-                    colors = ButtonDefaults.buttonColors(
+-                        containerColor = MaterialTheme.colorScheme.primary
+-                    )
+-                ) {
+-                    Icon(
+-                        imageVector = Icons.Default.Directions,
+-                        contentDescription = "Chỉ đường",
+-                        modifier = Modifier.size(20.dp)
+-                    )
+-                    Spacer(modifier = Modifier.width(6.dp))
+-                    Text(
+-                        text = stringResource(R.string.directions),
+-                        fontWeight = FontWeight.Bold
+-                    )
+-                }
+-
+-                // Save Toggle Button
+-                FilledTonalButton(
+-                    onClick = { onToggleSave(place.id) },
+-                    modifier = Modifier
+-                        .weight(1f)
+-                        .height(48.dp)
+-                        .testTag("save_place_button"),
+-                    shape = RoundedCornerShape(14.dp)
+-                ) {
+-                    Icon(
+-                        imageVector = if (place.isSaved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+-                        contentDescription = if (place.isSaved) "Bỏ lưu" else "Lưu",
+-                        tint = if (place.isSaved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+-                        modifier = Modifier.size(20.dp)
+-                    )
+-                    Spacer(modifier = Modifier.width(4.dp))
+-                    Text(
+-                        text = if (place.isSaved) stringResource(R.string.saved) else stringResource(R.string.save),
+-                        fontWeight = FontWeight.SemiBold
+-                    )
+-                }
+-
+-                // Call Button
+-                OutlinedButton(
+-                    onClick = { /* Call action */ },
+-                    modifier = Modifier
+-                        .height(48.dp)
+-                        .testTag("call_place_button"),
+-                    shape = RoundedCornerShape(14.dp)
+-                ) {
+-                    Icon(
+-                        imageVector = Icons.Default.Call,
+-                        contentDescription = "Gọi điện",
+-                        modifier = Modifier.size(18.dp)
+-                    )
+-                }
+-            }
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/example/ui/screen/components/SavedPlacesSheet.kt b/app/src/main/java/com/example/ui/screen/components/SavedPlacesSheet.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/screen/components/SavedPlacesSheet.kt
++++ /dev/null
+@@ -1,172 +0,0 @@
+-package com.example.ui.screen.components
+-
+-import androidx.compose.foundation.clickable
+-import androidx.compose.foundation.layout.Arrangement
+-import androidx.compose.foundation.layout.Box
+-import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.Row
+-import androidx.compose.foundation.layout.Spacer
+-import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.height
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.layout.width
+-import androidx.compose.foundation.lazy.LazyColumn
+-import androidx.compose.foundation.lazy.items
+-import androidx.compose.foundation.shape.RoundedCornerShape
+-import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.filled.Bookmark
+-import androidx.compose.material.icons.filled.Close
+-import androidx.compose.material.icons.filled.Delete
+-import androidx.compose.material.icons.filled.Place
+-import androidx.compose.material3.Card
+-import androidx.compose.material3.CardDefaults
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.IconButton
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.Surface
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.draw.shadow
+-import androidx.compose.ui.platform.testTag
+-import androidx.compose.ui.text.font.FontWeight
+-import androidx.compose.ui.unit.dp
+-import androidx.compose.ui.unit.sp
+-import com.example.data.model.Place
+-
+-@Composable
+-fun SavedPlacesSheet(
+-    savedPlaces: List<Place>,
+-    onSelectPlace: (Place) -> Unit,
+-    onRemoveSaved: (String) -> Unit,
+-    onDismiss: () -> Unit,
+-    modifier: Modifier = Modifier
+-) {
+-    Card(
+-        modifier = modifier
+-            .fillMaxWidth()
+-            .padding(horizontal = 16.dp, vertical = 12.dp)
+-            .shadow(elevation = 16.dp, shape = RoundedCornerShape(24.dp))
+-            .testTag("saved_places_sheet"),
+-        shape = RoundedCornerShape(24.dp),
+-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+-    ) {
+-        Column(
+-            modifier = Modifier
+-                .fillMaxWidth()
+-                .padding(20.dp)
+-        ) {
+-            Row(
+-                modifier = Modifier.fillMaxWidth(),
+-                horizontalArrangement = Arrangement.SpaceBetween,
+-                verticalAlignment = Alignment.CenterVertically
+-            ) {
+-                Row(verticalAlignment = Alignment.CenterVertically) {
+-                    Icon(
+-                        imageVector = Icons.Default.Bookmark,
+-                        contentDescription = null,
+-                        tint = MaterialTheme.colorScheme.primary,
+-                        modifier = Modifier.size(24.dp)
+-                    )
+-                    Spacer(modifier = Modifier.width(8.dp))
+-                    Text(
+-                        text = "Địa điểm đã lưu (${savedPlaces.size})",
+-                        style = MaterialTheme.typography.titleMedium.copy(
+-                            fontWeight = FontWeight.Bold,
+-                            fontSize = 18.sp
+-                        )
+-                    )
+-                }
+-
+-                IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+-                    Icon(
+-                        imageVector = Icons.Default.Close,
+-                        contentDescription = "Đóng",
+-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+-                    )
+-                }
+-            }
+-
+-            Spacer(modifier = Modifier.height(12.dp))
+-
+-            if (savedPlaces.isEmpty()) {
+-                Box(
+-                    modifier = Modifier
+-                        .fillMaxWidth()
+-                        .padding(vertical = 24.dp),
+-                    contentAlignment = Alignment.Center
+-                ) {
+-                    Text(
+-                        text = "Chưa có địa điểm nào được lưu. Hãy bấm 'Lưu' ở chi tiết địa điểm nhé!",
+-                        style = MaterialTheme.typography.bodyMedium,
+-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+-                    )
+-                }
+-            } else {
+-                LazyColumn(
+-                    modifier = Modifier.fillMaxWidth(),
+-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+-                ) {
+-                    items(savedPlaces, key = { it.id }) { place ->
+-                        Surface(
+-                            modifier = Modifier
+-                                .fillMaxWidth()
+-                                .clickable {
+-                                    onSelectPlace(place)
+-                                    onDismiss()
+-                                },
+-                            shape = RoundedCornerShape(12.dp),
+-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+-                        ) {
+-                            Row(
+-                                modifier = Modifier
+-                                    .fillMaxWidth()
+-                                    .padding(12.dp),
+-                                verticalAlignment = Alignment.CenterVertically,
+-                                horizontalArrangement = Arrangement.SpaceBetween
+-                            ) {
+-                                Row(
+-                                    modifier = Modifier.weight(1f),
+-                                    verticalAlignment = Alignment.CenterVertically
+-                                ) {
+-                                    Icon(
+-                                        imageVector = Icons.Default.Place,
+-                                        contentDescription = null,
+-                                        tint = MaterialTheme.colorScheme.primary,
+-                                        modifier = Modifier.size(20.dp)
+-                                    )
+-                                    Spacer(modifier = Modifier.width(8.dp))
+-                                    Column {
+-                                        Text(
+-                                            text = place.name,
+-                                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)
+-                                        )
+-                                        Text(
+-                                            text = place.address,
+-                                            style = MaterialTheme.typography.bodySmall,
+-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+-                                        )
+-                                    }
+-                                }
+-
+-                                IconButton(
+-                                    onClick = { onRemoveSaved(place.id) },
+-                                    modifier = Modifier.size(32.dp)
+-                                ) {
+-                                    Icon(
+-                                        imageVector = Icons.Default.Delete,
+-                                        contentDescription = "Bỏ lưu",
+-                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+-                                        modifier = Modifier.size(18.dp)
+-                                    )
+-                                }
+-                            }
+-                        }
+-                    }
+-                }
+-            }
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/example/ui/viewmodel/MapUiState.kt b/app/src/main/java/com/example/ui/viewmodel/MapUiState.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/viewmodel/MapUiState.kt
++++ /dev/null
+@@ -1,26 +0,0 @@
+-package com.example.ui.viewmodel
+-
+-import com.example.data.model.ApiConfig
+-import com.example.data.model.LatLng
+-import com.example.data.model.MapLayerType
+-import com.example.data.model.MapViewport
+-import com.example.data.model.Place
+-import com.example.data.model.PlaceCategory
+-import com.example.data.model.RouteInfo
+-
+-data class MapUiState(
+-    val places: List<Place> = emptyList(),
+-    val selectedPlace: Place? = null,
+-    val activeRoute: RouteInfo? = null,
+-    val viewport: MapViewport = MapViewport(),
+-    val userLocation: LatLng = LatLng(10.7769, 106.7009),
+-    val searchQuery: String = "",
+-    val selectedCategory: PlaceCategory = PlaceCategory.ALL,
+-    val savedPlaces: List<Place> = emptyList(),
+-    val isLoading: Boolean = false,
+-    val showLayersSheet: Boolean = false,
+-    val showSavedSheet: Boolean = false,
+-    val showApiConfigDialog: Boolean = false,
+-    val apiConfig: ApiConfig = ApiConfig(),
+-    val userNotice: String? = null
+-)
+diff --git a/app/src/main/java/com/example/ui/viewmodel/MapViewModel.kt b/app/src/main/java/com/example/ui/viewmodel/MapViewModel.kt
+deleted file mode 100644
+--- a/app/src/main/java/com/example/ui/viewmodel/MapViewModel.kt
++++ /dev/null
+@@ -1,203 +0,0 @@
+-package com.example.ui.viewmodel
+-
+-import androidx.lifecycle.ViewModel
+-import androidx.lifecycle.viewModelScope
+-import com.example.data.model.ApiConfig
+-import com.example.data.model.LatLng
+-import com.example.data.model.MapLayerType
+-import com.example.data.model.MapViewport
+-import com.example.data.model.Place
+-import com.example.data.model.PlaceCategory
+-import com.example.data.model.RouteInfo
+-import com.example.data.repository.MapRepository
+-import kotlinx.coroutines.flow.MutableStateFlow
+-import kotlinx.coroutines.flow.SharingStarted
+-import kotlinx.coroutines.flow.StateFlow
+-import kotlinx.coroutines.flow.combine
+-import kotlinx.coroutines.flow.flatMapLatest
+-import kotlinx.coroutines.flow.stateIn
+-import kotlinx.coroutines.flow.update
+-import kotlinx.coroutines.launch
+-
+-private data class MapDataState(
+-    val places: List<Place>,
+-    val selectedPlace: Place?,
+-    val activeRoute: RouteInfo?,
+-    val viewport: MapViewport,
+-    val savedPlaces: List<Place>
+-)
+-
+-private data class OverlayUiState(
+-    val showLayersSheet: Boolean = false,
+-    val showSavedSheet: Boolean = false,
+-    val showApiConfigDialog: Boolean = false,
+-    val userNotice: String? = null
+-)
+-
+-class MapViewModel(
+-    private val repository: MapRepository
+-) : ViewModel() {
+-
+-    private val _searchQuery = MutableStateFlow("")
+-    private val _selectedCategory = MutableStateFlow(PlaceCategory.ALL)
+-    private val _selectedPlace = MutableStateFlow<Place?>(null)
+-    private val _activeRoute = MutableStateFlow<RouteInfo?>(null)
+-    private val _viewport = MutableStateFlow(MapViewport())
+-    private val _overlayState = MutableStateFlow(OverlayUiState())
+-    private val _userLocation = LatLng(10.7769, 106.7009)
+-
+-    // Reactively query places stream based on category and search query Flow
+-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+-    private val _placesStream = combine(_selectedCategory, _searchQuery) { cat, query ->
+-        Pair(cat, query)
+-    }.flatMapLatest { (cat, query) ->
+-        repository.getPlacesStream(cat, query)
+-    }
+-
+-    private val _savedPlacesStream = repository.getSavedPlacesStream()
+-    private val _apiConfigStream = repository.getApiConfigStream()
+-
+-    private val _mapDataFlow = combine(
+-        _placesStream,
+-        _selectedPlace,
+-        _activeRoute,
+-        _viewport,
+-        _savedPlacesStream
+-    ) { places, selected, route, viewport, saved ->
+-        MapDataState(places, selected, route, viewport, saved)
+-    }
+-
+-    val uiState: StateFlow<MapUiState> = combine(
+-        _mapDataFlow,
+-        _selectedCategory,
+-        _searchQuery,
+-        _apiConfigStream,
+-        _overlayState
+-    ) { data, cat, query, apiConfig, overlay ->
+-        MapUiState(
+-            places = data.places,
+-            selectedPlace = data.selectedPlace,
+-            activeRoute = data.activeRoute,
+-            viewport = data.viewport,
+-            userLocation = _userLocation,
+-            searchQuery = query,
+-            selectedCategory = cat,
+-            savedPlaces = data.savedPlaces,
+-            isLoading = false,
+-            showLayersSheet = overlay.showLayersSheet,
+-            showSavedSheet = overlay.showSavedSheet,
+-            showApiConfigDialog = overlay.showApiConfigDialog,
+-            apiConfig = apiConfig,
+-            userNotice = overlay.userNotice
+-        )
+-    }.stateIn(
+-        scope = viewModelScope,
+-        started = SharingStarted.WhileSubscribed(5000),
+-        initialValue = MapUiState()
+-    )
+-
+-    fun onSearchQueryChange(query: String) {
+-        _searchQuery.value = query
+-    }
+-
+-    fun onCategorySelected(category: PlaceCategory) {
+-        if (_selectedCategory.value == category) {
+-            _selectedCategory.value = PlaceCategory.ALL
+-        } else {
+-            _selectedCategory.value = category
+-        }
+-    }
+-
+-    fun onPlaceSelected(place: Place) {
+-        _selectedPlace.value = place
+-        // Move viewport center slightly towards selected place
+-        _viewport.update { current ->
+-            current.copy(
+-                center = LatLng(place.latitude, place.longitude),
+-                zoomLevel = maxOf(14.5f, current.zoomLevel)
+-            )
+-        }
+-    }
+-
+-    fun onClearSelectedPlace() {
+-        _selectedPlace.value = null
+-    }
+-
+-    fun onStartNavigation(place: Place) {
+-        viewModelScope.launch {
+-            repository.getRouteStream(_userLocation, place).collect { route ->
+-                _activeRoute.value = route
+-                _selectedPlace.value = null
+-                _overlayState.update { it.copy(userNotice = "Bắt đầu chỉ đường đến ${place.name}") }
+-            }
+-        }
+-    }
+-
+-    fun onStopNavigation() {
+-        _activeRoute.value = null
+-        _overlayState.update { it.copy(userNotice = "Đã dừng điều hướng") }
+-    }
+-
+-    fun onToggleSavePlace(placeId: String) {
+-        viewModelScope.launch {
+-            repository.toggleSavePlace(placeId)
+-        }
+-    }
+-
+-    fun onCenterOnMyLocation() {
+-        _viewport.update { it.copy(center = _userLocation, zoomLevel = 15f) }
+-        _overlayState.update { it.copy(userNotice = "Đã căn giữa vị trí hiện tại") }
+-    }
+-
+-    fun onZoomIn() {
+-        _viewport.update { it.copy(zoomLevel = (it.zoomLevel + 0.5f).coerceAtMost(18f)) }
+-    }
+-
+-    fun onZoomOut() {
+-        _viewport.update { it.copy(zoomLevel = (it.zoomLevel - 0.5f).coerceAtLeast(10f)) }
+-    }
+-
+-    fun onPan(deltaLat: Double, deltaLng: Double) {
+-        _viewport.update { current ->
+-            current.copy(
+-                center = LatLng(
+-                    current.center.latitude + deltaLat,
+-                    current.center.longitude + deltaLng
+-                )
+-            )
+-        }
+-    }
+-
+-    fun onLayerSelected(layer: MapLayerType) {
+-        _viewport.update { it.copy(layerType = layer) }
+-        _overlayState.update { it.copy(showLayersSheet = false) }
+-    }
+-
+-    fun onToggleLayersSheet(show: Boolean) {
+-        _overlayState.update { it.copy(showLayersSheet = show) }
+-    }
+-
+-    fun onToggleSavedSheet(show: Boolean) {
+-        _overlayState.update { it.copy(showSavedSheet = show) }
+-    }
+-
+-    fun onToggleApiConfigDialog(show: Boolean) {
+-        _overlayState.update { it.copy(showApiConfigDialog = show) }
+-    }
+-
+-    fun onSaveApiConfig(newConfig: ApiConfig) {
+-        viewModelScope.launch {
+-            repository.updateApiConfig(newConfig)
+-            _overlayState.update {
+-                it.copy(
+-                    showApiConfigDialog = false,
+-                    userNotice = "Đã cập nhật cấu hình API!"
+-                )
+-            }
+-        }
+-    }
+-
+-    fun onDismissNotice() {
+-        _overlayState.update { it.copy(userNotice = null) }
+-    }
+-}

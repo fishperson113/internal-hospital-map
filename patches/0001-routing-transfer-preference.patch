@@ -1,0 +1,47 @@
+diff --git a/app/src/main/java/com/example/hospital/domain/usecase/FindHospitalRouteUseCase.kt b/app/src/main/java/com/example/hospital/domain/usecase/FindHospitalRouteUseCase.kt
+--- a/app/src/main/java/com/example/hospital/domain/usecase/FindHospitalRouteUseCase.kt
++++ b/app/src/main/java/com/example/hospital/domain/usecase/FindHospitalRouteUseCase.kt
+@@ -17,7 +17,9 @@
+     suspend operator fun invoke(
+         startRoomOrNodeId: String,
+         destRoomOrNodeId: String,
++        language: AppLanguage = AppLanguage.VIETNAMESE,
++        // null = any shaft (fastest); "elevator" or "stair" = only use that kind to change floors
++        preferredTransferKind: String? = null
+-        language: AppLanguage = AppLanguage.VIETNAMESE
+     ): HospitalRoute? {
+         val mapData = repository.getHospitalMap().first()
+         val graph = mapData.graph
+@@ -38,10 +40,13 @@
+                         return buildSingleFloorRoute(startFloor, startRoom, destRoom, pathResult, language)
+                     }
+                 } else {
++                    val multiFloorRoute = findMultiFloorRoute(startFloor, destFloor, startRoom, destRoom, language, preferredTransferKind)
+-                    val multiFloorRoute = findMultiFloorRoute(startFloor, destFloor, startRoom, destRoom, language)
+                     if (multiFloorRoute != null) {
+                         return multiFloorRoute
+                     }
++                    // A specific shaft kind was requested but none connects these floors:
++                    // report "no route" instead of silently falling back to the mock graph.
++                    if (preferredTransferKind != null) return null
+                 }
+             }
+         }
+@@ -174,7 +179,8 @@
+         floorB: Floor,
+         startRoom: Room,
+         destRoom: Room,
++        language: AppLanguage,
++        preferredTransferKind: String? = null
+-        language: AppLanguage
+     ): HospitalRoute? {
+         val shaftsA = floorA.rooms.filter { it.link != null }.associateBy { it.link!! }
+         val shaftsB = floorB.rooms.filter { it.link != null }.associateBy { it.link!! }
+@@ -188,6 +194,7 @@
+         for (link in commonLinks) {
+             val rA = shaftsA[link] ?: continue
+             val rB = shaftsB[link] ?: continue
++            if (preferredTransferKind != null && rA.kind != preferredTransferKind) continue
+ 
+             val s1 = GridAStarPathfinder.findPathOnFloor(floorA, startRoom, rA) ?: continue
+             val s2 = GridAStarPathfinder.findPathOnFloor(floorB, rB, destRoom) ?: continue
