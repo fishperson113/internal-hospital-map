@@ -29,7 +29,8 @@ import java.text.Normalizer
 class HospitalMapViewModel(
     private val getHospitalMapUseCase: GetHospitalMapUseCase,
     private val searchRoomsUseCase: SearchRoomsUseCase,
-    private val findHospitalRouteUseCase: FindHospitalRouteUseCase
+    private val findHospitalRouteUseCase: FindHospitalRouteUseCase,
+    private val sensorManager: com.example.hospital.sensor.HospitalSensorManager? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HospitalMapUiState())
@@ -38,9 +39,106 @@ class HospitalMapViewModel(
     private var roomsById: Map<String, Room> = emptyMap()
     private var routeJob: Job? = null
     private var searchJob: Job? = null
+    private var sensorJob: Job? = null
+    private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker()
+    private var lastObservedStepTrigger: Long = 0L
 
     init {
         loadMapData()
+        startSensorObservation()
+    }
+
+    private fun startSensorObservation() {
+        sensorManager?.startTracking()
+        sensorJob?.cancel()
+        sensorJob = viewModelScope.launch {
+            sensorManager?.sensorData?.collect { data ->
+                val wasNavigating = _uiState.value.isNavigating
+                val heading = data.headingDegrees
+                val isTracking = data.isTracking
+
+                // Format telemetry display (Heading, Steps, Pressure, Sensors)
+                val headingCompass = getCompassDirection(heading)
+                val tele = buildString {
+                    append("${heading.toInt()}° $headingCompass")
+                    if (data.totalSteps > 0) append(" · ${data.totalSteps} bước")
+                    if (data.pressureHpa != null) append(" · ${data.pressureHpa.toInt()} hPa")
+                    if (data.activeSensors.isNotEmpty()) append(" · ${data.activeSensors.size} cảm biến")
+                }
+
+                // If step detector triggered and user is navigating
+                if (wasNavigating && data.stepEventTrigger > lastObservedStepTrigger && data.stepEventTrigger > 0L) {
+                    val stepDelta = (data.stepEventTrigger - lastObservedStepTrigger).toInt().coerceIn(1, 10)
+                    lastObservedStepTrigger = data.stepEventTrigger
+                    var lastResult: com.example.hospital.sensor.IndoorPdrState? = null
+                    repeat(stepDelta) {
+                        val res = pdrTracker.onStep()
+                        if (res != null) lastResult = res
+                    }
+                    if (lastResult != null) {
+                        applyPdrUpdate(lastResult!!)
+                    }
+                }
+
+                // If barometer detected a floor transition
+                if (wasNavigating && data.floorChangeHint != 0) {
+                    val pdrResult = pdrTracker.onFloorPressureChange(data.floorChangeHint)
+                    if (pdrResult != null) {
+                        applyPdrUpdate(pdrResult)
+                    }
+                }
+
+                _uiState.update {
+                    it.copy(
+                        userHeadingDegrees = heading,
+                        stepCount = data.totalSteps,
+                        isSensorTrackingActive = isTracking,
+                        sensorTelemetryText = tele
+                    )
+                }
+            }
+        }
+    }
+
+    fun onPermissionsUpdated() {
+        sensorManager?.startTracking()
+    }
+
+    private fun applyPdrUpdate(pdr: com.example.hospital.sensor.IndoorPdrState) {
+        _uiState.update { current ->
+            // Advance navigation step index if user transitioned segments
+            val targetStep = when {
+                pdr.segmentIndex > 0 -> minOf(2, current.routeSteps.lastIndex)
+                pdr.isNearTransfer -> minOf(1, current.routeSteps.lastIndex)
+                else -> 0
+            }
+
+            // Sync floor view to current user floor
+            val targetFloor = if (pdr.isNearTransfer) null else pdr.floorLevel
+
+            current.copy(
+                userPosition = pdr.position,
+                userFloorLevel = pdr.floorLevel,
+                hasArrivedAtDestination = pdr.hasArrived,
+                selectedFloorLevel = targetFloor ?: current.selectedFloorLevel,
+                navStepIndex = maxOf(current.navStepIndex, targetStep)
+            )
+        }
+    }
+
+    private fun getCompassDirection(deg: Float): String {
+        val d = (deg + 22.5f) % 360f
+        return when ((d / 45f).toInt()) {
+            0 -> "B"
+            1 -> "ĐB"
+            2 -> "Đ"
+            3 -> "ĐN"
+            4 -> "N"
+            5 -> "TN"
+            6 -> "T"
+            7 -> "TB"
+            else -> "B"
+        }
     }
 
     private fun loadMapData() {
@@ -57,6 +155,13 @@ class HospitalMapViewModel(
                     ?: allRooms.find { it.floorLevel == 2 && it.name.contains("SIÊU ÂM") }
                     ?: allRooms.lastOrNull()
 
+                val startCenter = start?.let { room ->
+                    room.labelAt ?: com.example.hospital.domain.model.Point2D(
+                        room.boundsLeft + room.boundsWidth / 2f,
+                        room.boundsTop + room.boundsHeight / 2f
+                    )
+                }
+
                 _uiState.update {
                     it.copy(
                         isLoading = false,
@@ -64,7 +169,9 @@ class HospitalMapViewModel(
                         floors = mapData.floors,
                         selectedFloorLevel = null, // open on the 3D overview of all floors
                         startRoom = start,
-                        destRoom = dest
+                        destRoom = dest,
+                        userPosition = startCenter,
+                        userFloorLevel = start?.floorLevel ?: 2
                     )
                 }
                 calculateRoute(focusMapOnRoute = false)
@@ -114,7 +221,20 @@ class HospitalMapViewModel(
     // ---------------------------------------------------------------- route selection
 
     fun onSelectStartRoom(room: Room) {
-        _uiState.update { it.copy(startRoom = room, isSearchActive = false, selectedRoom = null, isNavigating = false) }
+        val center = room.labelAt ?: com.example.hospital.domain.model.Point2D(
+            room.boundsLeft + room.boundsWidth / 2f,
+            room.boundsTop + room.boundsHeight / 2f
+        )
+        _uiState.update {
+            it.copy(
+                startRoom = room,
+                isSearchActive = false,
+                selectedRoom = null,
+                isNavigating = false,
+                userPosition = center,
+                userFloorLevel = room.floorLevel
+            )
+        }
         calculateRoute(focusMapOnRoute = true)
     }
 
@@ -126,7 +246,19 @@ class HospitalMapViewModel(
     fun onSwapRooms() {
         val s = _uiState.value
         if (s.startRoom == null || s.destRoom == null) return
-        _uiState.update { it.copy(startRoom = s.destRoom, destRoom = s.startRoom) }
+        val newStart = s.destRoom
+        val center = newStart.labelAt ?: com.example.hospital.domain.model.Point2D(
+            newStart.boundsLeft + newStart.boundsWidth / 2f,
+            newStart.boundsTop + newStart.boundsHeight / 2f
+        )
+        _uiState.update {
+            it.copy(
+                startRoom = s.destRoom,
+                destRoom = s.startRoom,
+                userPosition = center,
+                userFloorLevel = newStart.floorLevel
+            )
+        }
         calculateRoute(focusMapOnRoute = true)
     }
 
@@ -161,11 +293,22 @@ class HospitalMapViewModel(
 
     fun onStartNavigation() {
         val steps = _uiState.value.routeSteps
+        val route = _uiState.value.currentRoute
         if (steps.isEmpty()) return
+
+        sensorManager?.startTracking()
+        val initialPdr = if (route != null) pdrTracker.initialize(route) else null
+
         _uiState.update {
             it.copy(
-                isNavigating = true, navStepIndex = 0, selectedRoom = null, isRouteDetailsExpanded = false,
-                selectedFloorLevel = steps[0].focusFloorLevel
+                isNavigating = true,
+                navStepIndex = 0,
+                selectedRoom = null,
+                isRouteDetailsExpanded = false,
+                selectedFloorLevel = initialPdr?.floorLevel ?: steps[0].focusFloorLevel,
+                userPosition = initialPdr?.position ?: it.startRoom?.let { room -> room.labelAt ?: com.example.hospital.domain.model.Point2D(room.boundsLeft + room.boundsWidth / 2f, room.boundsTop + room.boundsHeight / 2f) },
+                userFloorLevel = initialPdr?.floorLevel ?: it.startRoom?.floorLevel,
+                hasArrivedAtDestination = false
             )
         }
     }
@@ -187,8 +330,33 @@ class HospitalMapViewModel(
         _uiState.update { it.copy(navStepIndex = prev, selectedFloorLevel = s.routeSteps[prev].focusFloorLevel) }
     }
 
+    fun onSimulateStep() {
+        if (!_uiState.value.isNavigating) return
+        val pdrResult = pdrTracker.onStep()
+        if (pdrResult != null) {
+            applyPdrUpdate(pdrResult)
+        }
+    }
+
+    fun onToggleAutoRotate() {
+        _uiState.update { it.copy(isAutoRotateEnabled = !it.isAutoRotateEnabled) }
+    }
+
     fun onStopNavigation() {
-        _uiState.update { it.copy(isNavigating = false, navStepIndex = 0) }
+        _uiState.update {
+            it.copy(
+                isNavigating = false,
+                navStepIndex = 0,
+                isAutoRotateEnabled = false,
+                hasArrivedAtDestination = false
+            )
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        sensorJob?.cancel()
+        sensorManager?.stopTracking()
     }
 
     /** System back: close the top-most layer first. Returns true if something was closed. */

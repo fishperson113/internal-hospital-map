@@ -24,7 +24,9 @@ import java.util.concurrent.TimeUnit
  * Concrete Dependency Injection Container.
  * Manages network clients, services, and repositories as singletons.
  */
-class DefaultAppContainer : AppContainer {
+class DefaultAppContainer(
+    private val context: android.content.Context? = null
+) : AppContainer {
 
     private val defaultBaseUrl = "https://api.mapflow.internal/v1/"
 
@@ -87,5 +89,9 @@ class DefaultAppContainer : AppContainer {
             repository = hospitalMapRepository,
             pathfindingStrategy = pathfindingStrategy
         )
+    }
+
+    override val sensorManager: com.example.hospital.sensor.HospitalSensorManager? by lazy {
+        context?.let { com.example.hospital.sensor.HospitalSensorManager(it) }
     }
 }

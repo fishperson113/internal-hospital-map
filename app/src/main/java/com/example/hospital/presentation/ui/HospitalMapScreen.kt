@@ -1,6 +1,10 @@
 package com.example.hospital.presentation.ui
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,8 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -21,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -29,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.hospital.presentation.ui.components.FloorEmptyCard
 import com.example.hospital.presentation.ui.components.FloorRail
+import com.example.hospital.presentation.ui.components.CompassFab
 import com.example.hospital.presentation.ui.components.HospitalCanvasMap
 import com.example.hospital.presentation.ui.components.MapFab
 import com.example.hospital.presentation.ui.components.MapViewportInsets
@@ -79,6 +87,24 @@ fun HospitalMapScreen(
     var topBlockBottomPx by remember { mutableFloatStateOf(0f) }
     var bottomSheetPx by remember { mutableFloatStateOf(0f) }
 
+    // Request device sensors and location permissions
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        viewModel.onPermissionsUpdated()
+    }
+
+    LaunchedEffect(Unit) {
+        val permissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.add(Manifest.permission.ACTIVITY_RECOGNITION)
+        }
+        permissionLauncher.launch(permissions.toTypedArray())
+    }
+
     val hasRoute = ui.startRoom != null && ui.destRoom != null
     val routeLevels = ui.currentRoute?.segments?.map { it.floorLevel }?.toSet() ?: emptySet()
     val currentFloor = ui.floors.find { it.level == ui.selectedFloorLevel }
@@ -108,6 +134,11 @@ fun HospitalMapScreen(
             language = lang,
             viewportInsets = insets,
             recenterRequest = recenterRequest,
+            userPosition = ui.userPosition,
+            userFloorLevel = ui.userFloorLevel,
+            userHeadingDegrees = ui.userHeadingDegrees,
+            isNavigating = ui.isNavigating,
+            isAutoRotateEnabled = ui.isAutoRotateEnabled,
             onRoomClick = viewModel::onRoomTapped,
             onSelectFloor = { level -> if (!ui.isNavigating) viewModel.onSelectFloor(level) },
             onEmptyTap = viewModel::onMapEmptyTap,
@@ -189,6 +220,12 @@ fun HospitalMapScreen(
                         language = lang,
                         onSelectFloor = viewModel::onSelectFloor
                     )
+                    CompassFab(
+                        headingDegrees = ui.userHeadingDegrees,
+                        isFollowMode = ui.isAutoRotateEnabled,
+                        onClick = viewModel::onToggleAutoRotate,
+                        language = lang
+                    )
                     MapFab(
                         contentDescription = l.t(lang, "Căn giữa bản đồ", "Recenter map"),
                         icon = Icons.Default.CenterFocusStrong,
@@ -218,8 +255,11 @@ fun HospitalMapScreen(
                     steps = ui.routeSteps,
                     stepIndex = ui.navStepIndex,
                     language = lang,
+                    telemetryText = ui.sensorTelemetryText,
+                    hasArrived = ui.hasArrivedAtDestination,
                     onPrevious = viewModel::onPreviousStep,
                     onNext = viewModel::onNextStep,
+                    onSimulateStep = viewModel::onSimulateStep,
                     onExit = viewModel::onStopNavigation
                 )
                 selected != null -> RoomDetailSheet(

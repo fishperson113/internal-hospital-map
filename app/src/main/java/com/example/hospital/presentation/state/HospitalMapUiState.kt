@@ -59,5 +59,15 @@ data class HospitalMapUiState(
     val isNavigating: Boolean = false,
     val navStepIndex: Int = 0,
 
+    // Real-time sensor positioning & orientation
+    val userPosition: com.example.hospital.domain.model.Point2D? = null,
+    val userFloorLevel: Int? = null,
+    val userHeadingDegrees: Float = 0f,
+    val stepCount: Int = 0,
+    val isAutoRotateEnabled: Boolean = false,
+    val isSensorTrackingActive: Boolean = false,
+    val sensorTelemetryText: String = "",
+    val hasArrivedAtDestination: Boolean = false,
+
     val language: AppLanguage = AppLanguage.VIETNAMESE
 )

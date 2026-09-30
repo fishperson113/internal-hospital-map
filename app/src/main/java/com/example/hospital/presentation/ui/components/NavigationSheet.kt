@@ -80,8 +80,11 @@ fun NavigationSheet(
     steps: List<RouteStepUi>,
     stepIndex: Int,
     language: AppLanguage,
+    telemetryText: String = "",
+    hasArrived: Boolean = false,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onSimulateStep: () -> Unit = {},
     onExit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -91,12 +94,15 @@ fun NavigationSheet(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    l.t(language, "Bước ${stepIndex + 1}/${steps.size}", "Step ${stepIndex + 1} of ${steps.size}"),
-                    fontSize = 13.sp, color = MapInkMuted
+                    if (hasArrived) l.t(language, "🎉 Đã tới đích!", "🎉 Arrived at destination!")
+                    else l.t(language, "Bước ${stepIndex + 1}/${steps.size}", "Step ${stepIndex + 1} of ${steps.size}"),
+                    fontSize = 13.sp, color = if (hasArrived) MapGreenSuccess else MapInkMuted,
+                    fontWeight = if (hasArrived) FontWeight.Bold else FontWeight.Normal
                 )
                 val min = RouteStepFormatter.remainingMinutes(steps, stepIndex)
                 Text(
-                    l.t(language, "Còn ~$min phút", "~$min min left"),
+                    if (hasArrived) l.t(language, "Hoàn tất lộ trình", "Route completed")
+                    else l.t(language, "Còn ~$min phút", "~$min min left"),
                     fontSize = 18.sp, fontWeight = FontWeight.Medium, color = MapGreenSuccess
                 )
             }
@@ -107,6 +113,57 @@ fun NavigationSheet(
                 Text(l.t(language, "Thoát", "Exit"), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MapRedOnContainer)
             }
         }
+
+        // Live Sensor Telemetry Badge (Heading, Steps, Pressure) + Step Simulation button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (telemetryText.isNotBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFFF1F5F9),
+                    border = BorderStroke(0.8.dp, Color(0xFFE2E8F0))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "📡 $telemetryText",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF475569)
+                        )
+                    }
+                }
+            }
+
+            // Quick step simulation button for testing on desk or emulator
+            Surface(
+                onClick = onSimulateStep,
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFFE0F2FE),
+                border = BorderStroke(0.8.dp, Color(0xFFBAE6FD)),
+                modifier = Modifier.testTag("btn_simulate_step")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "👟 +1 bước",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF0369A1)
+                    )
+                }
+            }
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             steps.indices.forEach { i ->
                 Box(

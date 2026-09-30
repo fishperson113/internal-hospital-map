@@ -22,4 +22,5 @@ interface AppContainer {
     val getHospitalMapUseCase: GetHospitalMapUseCase
     val searchRoomsUseCase: SearchRoomsUseCase
     val findHospitalRouteUseCase: FindHospitalRouteUseCase
+    val sensorManager: com.example.hospital.sensor.HospitalSensorManager?
 }

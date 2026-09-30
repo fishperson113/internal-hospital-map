@@ -28,6 +28,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -121,6 +124,7 @@ fun MapFab(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     text: String? = null,
+    tint: Color = MapInk,
     testTag: String = ""
 ) {
     Surface(
@@ -131,7 +135,7 @@ fun MapFab(
         modifier = modifier.size(44.dp).testTag(testTag)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            if (icon != null) Icon(icon, contentDescription = contentDescription, tint = MapInk, modifier = Modifier.size(22.dp))
+            if (icon != null) Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(22.dp))
             if (text != null) Text(text, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MapBluePrimary)
         }
     }
@@ -209,6 +213,65 @@ fun MapBottomSheetContainer(
                 Box(Modifier.width(32.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MapDivider))
             }
             content()
+        }
+    }
+}
+
+/** Floating compass button: needle rotates in real-time, click toggles heading follow / aligns to North. */
+@Composable
+fun CompassFab(
+    headingDegrees: Float,
+    isFollowMode: Boolean,
+    onClick: () -> Unit,
+    language: AppLanguage,
+    modifier: Modifier = Modifier
+) {
+    val l = HospitalLocalization
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = if (isFollowMode) MapBluePrimary else Color.White,
+        shadowElevation = FloatingElevation,
+        modifier = modifier.size(44.dp).testTag("btn_compass")
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Canvas(modifier = Modifier.size(24.dp)) {
+                val cx = size.width / 2f
+                val cy = size.height / 2f
+                val rad = Math.toRadians((-headingDegrees).toDouble()).toFloat()
+                val needleLen = size.width * 0.42f
+                val needleWidth = size.width * 0.16f
+
+                // North red pointer
+                val nx = cx + needleLen * kotlin.math.sin(rad)
+                val ny = cy - needleLen * kotlin.math.cos(rad)
+                val lx = cx + needleWidth * kotlin.math.cos(rad)
+                val ly = cy + needleWidth * kotlin.math.sin(rad)
+                val rx = cx - needleWidth * kotlin.math.cos(rad)
+                val ry = cy - needleWidth * kotlin.math.sin(rad)
+
+                val northPath = Path().apply {
+                    moveTo(nx, ny)
+                    lineTo(lx, ly)
+                    lineTo(rx, ry)
+                    close()
+                }
+                drawPath(northPath, Color(0xFFD93025))
+
+                // South white/grey pointer
+                val sx = cx - needleLen * kotlin.math.sin(rad)
+                val sy = cy + needleLen * kotlin.math.cos(rad)
+                val southPath = Path().apply {
+                    moveTo(sx, sy)
+                    lineTo(lx, ly)
+                    lineTo(rx, ry)
+                    close()
+                }
+                drawPath(southPath, if (isFollowMode) Color.White.copy(alpha = 0.85f) else Color(0xFF9AA0A6))
+
+                // Center pivot dot
+                drawCircle(if (isFollowMode) Color.White else Color(0xFF3C4043), radius = 2.dp.toPx(), center = Offset(cx, cy))
+            }
         }
     }
 }

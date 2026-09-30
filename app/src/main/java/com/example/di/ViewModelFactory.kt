@@ -19,7 +19,8 @@ class ViewModelFactory(
                 HospitalMapViewModel(
                     getHospitalMapUseCase = appContainer.getHospitalMapUseCase,
                     searchRoomsUseCase = appContainer.searchRoomsUseCase,
-                    findHospitalRouteUseCase = appContainer.findHospitalRouteUseCase
+                    findHospitalRouteUseCase = appContainer.findHospitalRouteUseCase,
+                    sensorManager = appContainer.sensorManager
                 ) as T
             }
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")

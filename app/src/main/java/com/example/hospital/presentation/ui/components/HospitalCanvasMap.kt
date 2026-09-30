@@ -2,6 +2,11 @@ package com.example.hospital.presentation.ui.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -22,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
@@ -91,6 +97,11 @@ fun HospitalCanvasMap(
     language: AppLanguage,
     viewportInsets: MapViewportInsets,
     recenterRequest: Int,
+    userPosition: Point2D? = null,
+    userFloorLevel: Int? = null,
+    userHeadingDegrees: Float = 0f,
+    isNavigating: Boolean = false,
+    isAutoRotateEnabled: Boolean = false,
     onRoomClick: (Room) -> Unit,
     onSelectFloor: (Int?) -> Unit,
     onEmptyTap: () -> Unit,
@@ -178,6 +189,31 @@ fun HospitalCanvasMap(
         if (isTransitioning) overlayAlpha.snapTo(0f) else overlayAlpha.animateTo(1f, tween(240))
     }
 
+    val infiniteTransition = rememberInfiniteTransition(label = "user_pulse")
+    val pulseProgress by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1300, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pulse_progress"
+    )
+
+    // When auto-rotate is enabled during navigation in 2D, smoothly align camera spin with user compass heading
+    LaunchedEffect(isAutoRotateEnabled, userHeadingDegrees, selectedFloorLevel, isNavigating, isTransitioning) {
+        if (isAutoRotateEnabled && isNavigating && selectedFloorLevel != null && !isTransitioning) {
+            val c = camera ?: return@LaunchedEffect
+            val targetSpin = (userHeadingDegrees + 90f) % 360f
+            var diff = (targetSpin - c.spinDeg) % 360f
+            if (diff > 180f) diff -= 360f
+            if (diff < -180f) diff += 360f
+            if (kotlin.math.abs(diff) > 1.5f) {
+                camera = c.copy(spinDeg = (c.spinDeg + diff * 0.28f + 360f) % 360f)
+            }
+        }
+    }
+
     val is3dView = selectedFloorLevel == null
 
     Box(
@@ -250,6 +286,17 @@ fun HospitalCanvasMap(
                     drawTransferLink(currentRoute, floorVisuals, pj, oa)
                 }
                 drawRoutePins(currentRoute, floorVisuals, pj, oa, elevatorPainter, stairsPainter)
+                if (userPosition != null && userFloorLevel != null) {
+                    drawUserLocationWithHeading(
+                        position = userPosition,
+                        floorLevel = userFloorLevel,
+                        headingDegrees = userHeadingDegrees,
+                        floorVisuals = floorVisuals,
+                        pj = pj,
+                        alpha = oa,
+                        pulseProgress = pulseProgress
+                    )
+                }
                 if (is3dView) {
                     drawFloorTags(sortedFloors, floorVisuals, routeLevels, pj, planW, planH, textMeasurer, language, oa)
                 } else {
@@ -490,6 +537,130 @@ private fun DrawScope.drawRoutePins(
         drawCircle(MapRedAlert, rr, head, alpha = alpha)
         drawCircle(Color.White, rr * 0.38f, head, alpha = alpha)
     }
+}
+
+private fun DrawScope.drawUserLocationWithHeading(
+    position: Point2D,
+    floorLevel: Int,
+    headingDegrees: Float,
+    floorVisuals: Map<Int, FloorVisual>,
+    pj: MapProjector,
+    alpha: Float,
+    pulseProgress: Float
+) {
+    val vis = floorVisuals[floorLevel] ?: return
+    if (vis.alpha < 0.2f) return
+
+    val z = vis.z
+    val centerScreen = pj.project(position.x, position.y, z)
+
+    // Calculate heading vector in plan coordinates: 0° = North (-Y), 90° = East (+X)
+    val rad = Math.toRadians(headingDegrees.toDouble())
+    val forwardX = position.x + (30f * kotlin.math.sin(rad)).toFloat()
+    val forwardY = position.y - (30f * kotlin.math.cos(rad)).toFloat()
+    val forwardScreen = pj.project(forwardX, forwardY, z)
+
+    val dirX = forwardScreen.x - centerScreen.x
+    val dirY = forwardScreen.y - centerScreen.y
+    val screenAngleRad = kotlin.math.atan2(dirY, dirX)
+
+    val combinedAlpha = alpha * vis.alpha
+
+    // 1. Directional Flashlight Beam / Heading Cone (Cơ chế xoay chỉ hướng theo cảm biến điện thoại)
+    val beamRadius = 48.dp.toPx()
+    val coneHalfAngle = Math.toRadians(32.0).toFloat()
+    val leftAngle = screenAngleRad - coneHalfAngle
+    val rightAngle = screenAngleRad + coneHalfAngle
+
+    val beamPath = Path().apply {
+        moveTo(centerScreen.x, centerScreen.y)
+        val steps = 8
+        for (i in 0..steps) {
+            val a = leftAngle + (rightAngle - leftAngle) * (i.toFloat() / steps)
+            val bx = centerScreen.x + beamRadius * kotlin.math.cos(a)
+            val by = centerScreen.y + beamRadius * kotlin.math.sin(a)
+            lineTo(bx, by)
+        }
+        close()
+    }
+
+    // Cone radial gradient: vivid soft blue at origin, fading to transparent at outer perimeter
+    drawPath(
+        path = beamPath,
+        brush = Brush.radialGradient(
+            colors = listOf(
+                MapBluePrimary.copy(alpha = 0.58f * combinedAlpha),
+                MapBluePrimary.copy(alpha = 0.20f * combinedAlpha),
+                Color.Transparent
+            ),
+            center = centerScreen,
+            radius = beamRadius
+        )
+    )
+
+    // Heading central beam pointer
+    val tipX = centerScreen.x + (beamRadius * 0.72f) * kotlin.math.cos(screenAngleRad)
+    val tipY = centerScreen.y + (beamRadius * 0.72f) * kotlin.math.sin(screenAngleRad)
+    drawLine(
+        color = MapBluePrimary.copy(alpha = 0.85f * combinedAlpha),
+        start = centerScreen,
+        end = Offset(tipX, tipY),
+        strokeWidth = 2.5.dp.toPx(),
+        cap = StrokeCap.Round
+    )
+
+    // 2. Animated Radar Pulse Wave
+    val maxPulseRadius = 26.dp.toPx()
+    val pulseR = 8.dp.toPx() + (maxPulseRadius - 8.dp.toPx()) * pulseProgress
+    val pulseA = (1f - pulseProgress).coerceIn(0f, 1f) * 0.45f * combinedAlpha
+    drawCircle(
+        color = MapBluePrimary.copy(alpha = pulseA),
+        radius = pulseR,
+        center = centerScreen
+    )
+
+    // 3. User Location Dot with high-contrast halo
+    drawCircle(
+        color = Color.Black.copy(alpha = 0.22f * combinedAlpha),
+        radius = 12.dp.toPx(),
+        center = centerScreen + Offset(0f, 1.5.dp.toPx())
+    )
+    drawCircle(
+        color = Color.White,
+        radius = 10.5.dp.toPx(),
+        center = centerScreen,
+        alpha = combinedAlpha
+    )
+    drawCircle(
+        color = MapBluePrimary,
+        radius = 7.5.dp.toPx(),
+        center = centerScreen,
+        alpha = combinedAlpha
+    )
+
+    // 4. Directional Navigation Chevron / Pointer right on the location dot
+    val arrowLen = 6.dp.toPx()
+    val arrowWidth = 4.5.dp.toPx()
+    val arrowTipX = centerScreen.x + arrowLen * kotlin.math.cos(screenAngleRad)
+    val arrowTipY = centerScreen.y + arrowLen * kotlin.math.sin(screenAngleRad)
+    val leftRad = screenAngleRad + Math.toRadians(140.0).toFloat()
+    val rightRad = screenAngleRad - Math.toRadians(140.0).toFloat()
+    val leftX = centerScreen.x + arrowWidth * kotlin.math.cos(leftRad)
+    val leftY = centerScreen.y + arrowWidth * kotlin.math.sin(leftRad)
+    val rightX = centerScreen.x + arrowWidth * kotlin.math.cos(rightRad)
+    val rightY = centerScreen.y + arrowWidth * kotlin.math.sin(rightRad)
+
+    val chevronPath = Path().apply {
+        moveTo(arrowTipX, arrowTipY)
+        lineTo(leftX, leftY)
+        lineTo(
+            centerScreen.x - (arrowLen * 0.25f) * kotlin.math.cos(screenAngleRad),
+            centerScreen.y - (arrowLen * 0.25f) * kotlin.math.sin(screenAngleRad)
+        )
+        lineTo(rightX, rightY)
+        close()
+    }
+    drawPath(chevronPath, Color.White, alpha = combinedAlpha)
 }
 
 // -----------------------------------------------------------------------------
