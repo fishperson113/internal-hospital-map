@@ -258,7 +258,7 @@ fun HospitalCanvasMap(
                         val room = if (floor != null && !floor.isTodo && world != null) {
                             floor.rooms.lastOrNull { it.polygon.size >= 3 && pointInPolygon(world.x, world.y, it.polygon) }
                         } else null
-                        if (room != null) latestOnRoomClick(room) else latestOnEmptyTap(world)
+                        if (room != null) latestOnRoomClick(room) else latestOnEmptyTap(world?.let { Point2D(it.x, it.y) })
                     }
                 }
             }
