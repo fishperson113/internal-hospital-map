@@ -2,8 +2,12 @@ package com.example.hospital.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.hospital.domain.model.Floor
 import com.example.hospital.domain.model.HospitalRoute
+import com.example.hospital.domain.model.Point2D
 import com.example.hospital.domain.model.Room
+import com.example.hospital.domain.model.RoomCategory
+import com.example.hospital.domain.util.HospitalGeometry
 import com.example.hospital.domain.usecase.FindHospitalRouteUseCase
 import com.example.hospital.domain.usecase.GetHospitalMapUseCase
 import com.example.hospital.domain.usecase.SearchRoomsUseCase
@@ -23,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.text.Normalizer
+import kotlin.math.roundToInt
 
 /**
  * Screen state for the indoor map. Camera (zoom / pan / 3D orbit / 3D↔2D animation) is
@@ -43,7 +48,7 @@ class HospitalMapViewModel(
     private var routeJob: Job? = null
     private var searchJob: Job? = null
     private var sensorJob: Job? = null
-    private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker(context = sensorManager?.context)
+    private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker()
     private var lastObservedStepTrigger: Long = 0L
     private var live = false // like the web: the CRM sees the user once they pick a place / start / ask help
     private val liveClient = com.example.hospital.data.api.LiveClient(context = sensorManager?.context) { status ->
@@ -66,7 +71,6 @@ class HospitalMapViewModel(
         sensorJob?.cancel()
         sensorJob = viewModelScope.launch {
             sensorManager?.sensorData?.collect { data ->
-                val wasNavigating = _uiState.value.isNavigating
                 val heading = data.headingDegrees
                 val isTracking = data.isTracking
 
@@ -79,25 +83,14 @@ class HospitalMapViewModel(
                     if (data.activeSensors.isNotEmpty()) append(" · ${data.activeSensors.size} cảm biến")
                 }
 
-                // Each step moves the dot from the start place along the compass heading
+                // While directions are on, each step slides the dot along the route
                 if (data.stepEventTrigger > lastObservedStepTrigger) {
                     val stepDelta = (data.stepEventTrigger - lastObservedStepTrigger).toInt().coerceIn(1, 10)
                     lastObservedStepTrigger = data.stepEventTrigger
-                    var lastResult: com.example.hospital.sensor.IndoorPdrState? = null
-                    repeat(stepDelta) {
-                        val res = pdrTracker.onStep(heading)
-                        if (res != null) lastResult = res
-                    }
-                    if (lastResult != null) {
-                        applyPdrUpdate(lastResult!!)
-                    }
-                }
-
-                // If barometer detected a floor transition
-                if (wasNavigating && data.floorChangeHint != 0) {
-                    val pdrResult = pdrTracker.onFloorPressureChange(data.floorChangeHint)
-                    if (pdrResult != null) {
-                        applyPdrUpdate(pdrResult)
+                    if (_uiState.value.isNavigating) {
+                        var last: com.example.hospital.sensor.IndoorPdrState? = null
+                        repeat(stepDelta) { pdrTracker.onStep()?.let { last = it } }
+                        last?.let(::applyPdrUpdate)
                     }
                 }
 
@@ -118,32 +111,23 @@ class HospitalMapViewModel(
     }
 
     private fun applyPdrUpdate(pdr: com.example.hospital.sensor.IndoorPdrState) {
-        _uiState.update { current ->
-            // Advance navigation step index if user transitioned segments
-            val targetStep = when {
-                pdr.segmentIndex > 0 -> minOf(2, current.routeSteps.lastIndex)
-                pdr.isNearTransfer -> minOf(1, current.routeSteps.lastIndex)
-                else -> 0
-            }
-
-            // While navigating, keep the view on the floor the user is on
-            val targetFloor = if (pdr.isNearTransfer) null else pdr.floorLevel
-            val follow = current.isNavigating
-
-            current.copy(
-                userPosition = pdr.position,
-                userFloorLevel = pdr.floorLevel,
-                hasArrivedAtDestination = follow && pdr.hasArrived,
-                selectedFloorLevel = if (follow) targetFloor ?: current.selectedFloorLevel else current.selectedFloorLevel,
-                navStepIndex = if (follow) maxOf(current.navStepIndex, targetStep) else current.navStepIndex
-            )
+        _uiState.update {
+            it.copy(userPosition = pdr.position, userFloorLevel = pdr.floorLevel, hasArrivedAtDestination = pdr.hasArrived)
         }
+    }
+
+    /** Like the web: when not walking, the user's dot IS the start of the route (one marker). */
+    private fun placeAtRouteStart(route: HospitalRoute) {
+        val seg = route.segments.firstOrNull() ?: return
+        val p = seg.points.firstOrNull() ?: return
+        _uiState.update { it.copy(userPosition = p, userFloorLevel = seg.floorLevel, hasArrivedAtDestination = false) }
     }
 
     /** Patient state for the CRM, in the shape src/backend/live.js accepts (rooms as {floor, id}). */
     private fun liveJson(s: HospitalMapUiState): String? {
         val start = s.startRoom ?: return null
-        fun room(r: Room?) = r?.let { JSONObject().put("floor", it.floorId).put("id", it.rawId) }
+        // A picked spot is sent as its nearest room (rawId), like the web's nearestRoom()
+        fun room(r: Room?) = r?.takeIf { it.rawId >= 0 }?.let { JSONObject().put("floor", it.floorId).put("id", it.rawId) }
         val pos = s.userPosition?.let { p ->
             val floorId = s.floors.find { it.level == s.userFloorLevel }?.floorId ?: start.floorId
             JSONObject().put("floor", floorId).put("x", p.x.toDouble()).put("y", p.y.toDouble())
@@ -155,7 +139,6 @@ class HospitalMapViewModel(
             .put("to", room(s.destRoom))
             .put("at", room(start)) // ponytail: "near" = start place; nearest room to pos when the CRM needs it
             .put("pos", pos)
-            .put("heading", pdrTracker.getCurrentState()?.planHeadingDeg?.toDouble() as Any?)
             .put("nav", s.isNavigating)
             .put("step", s.navStepIndex)
             .put("steps", s.routeSteps.size)
@@ -238,8 +221,41 @@ class HospitalMapViewModel(
     }
 
     /** Background tap: close the room sheet / collapse the directions list. */
-    fun onMapEmptyTap() {
-        _uiState.update { it.copy(selectedRoom = null, isRouteDetailsExpanded = false) }
+    /**
+     * Tap outside any room. In 2D inside the floor plan it picks that spot (web: tap()), so the
+     * user can say "I am here" anywhere in a corridor; elsewhere it just closes the sheets.
+     */
+    fun onMapEmptyTap(point: Point2D?) {
+        val s = _uiState.value
+        val floor = s.floors.find { it.level == s.selectedFloorLevel }
+        val fr = floor?.frame
+        val inside = point != null && floor != null && !floor.isTodo &&
+            (fr == null || fr.size < 4 || (point.x in fr[0]..fr[2] && point.y in fr[1]..fr[3]))
+        val spot = if (inside && !s.isNavigating) spotRoom(floor!!, point!!) else null
+        _uiState.update { it.copy(selectedRoom = spot, isRouteDetailsExpanded = false) }
+    }
+
+    /**
+     * ponytail: a tapped spot travels through the app as a Room with no polygon, so every
+     * "start / destination" path keeps working. id = the server's "floor@x,y" route target,
+     * rawId = nearest named room (what the CRM shows as "near").
+     */
+    private fun spotRoom(floor: Floor, p: Point2D): Room {
+        val near = HospitalGeometry.nearestRoom(floor.rooms, p.x, p.y)
+        val x = p.x.roundToInt()
+        val y = p.y.roundToInt()
+        return Room(
+            id = "${floor.floorId}@$x,$y",
+            code = "",
+            name = "Gần ${near?.name.orEmpty()}".trim(),
+            nameEn = near?.nameEn?.takeIf { it.isNotBlank() }?.let { "Near $it" }.orEmpty(),
+            floorLevel = floor.level,
+            category = RoomCategory.FACILITY,
+            nodeId = "",
+            labelAt = Point2D(x.toFloat(), y.toFloat()),
+            rawId = near?.rawId ?: -1,
+            floorId = floor.floorId
+        )
     }
 
     fun onRouteToSelectedRoom() {
@@ -269,7 +285,6 @@ class HospitalMapViewModel(
             room.boundsLeft + room.boundsWidth / 2f,
             room.boundsTop + room.boundsHeight / 2f
         )
-        pdrTracker.startAt(center, room.floorLevel, room.floorId)
         _uiState.update { it.copy(startRoom = room, userPosition = center, userFloorLevel = room.floorLevel) }
     }
 
@@ -328,7 +343,7 @@ class HospitalMapViewModel(
         val route = _uiState.value.currentRoute
         if (steps.isEmpty()) return
         goLive()
-        val initialPdr = if (route != null) pdrTracker.initialize(route) else null
+        val initialPdr = route?.let(pdrTracker::initialize)
 
         _uiState.update {
             it.copy(
@@ -352,6 +367,7 @@ class HospitalMapViewModel(
         }
         val next = s.navStepIndex + 1
         _uiState.update { it.copy(navStepIndex = next, selectedFloorLevel = s.routeSteps[next].focusFloorLevel) }
+        pdrTracker.goToStep(next)?.let(::applyPdrUpdate) // floor change happens only here
     }
 
     fun onPreviousStep() {
@@ -359,14 +375,12 @@ class HospitalMapViewModel(
         if (s.navStepIndex <= 0) return
         val prev = s.navStepIndex - 1
         _uiState.update { it.copy(navStepIndex = prev, selectedFloorLevel = s.routeSteps[prev].focusFloorLevel) }
+        pdrTracker.goToStep(prev)?.let(::applyPdrUpdate)
     }
 
     fun onSimulateStep() {
         if (!_uiState.value.isNavigating) return
-        val pdrResult = pdrTracker.onStep(_uiState.value.userHeadingDegrees)
-        if (pdrResult != null) {
-            applyPdrUpdate(pdrResult)
-        }
+        pdrTracker.onStep()?.let(::applyPdrUpdate)
     }
 
     fun onToggleAutoRotate() {
@@ -382,6 +396,7 @@ class HospitalMapViewModel(
                 hasArrivedAtDestination = false
             )
         }
+        _uiState.value.currentRoute?.let(::placeAtRouteStart)
     }
 
     override fun onCleared() {
@@ -480,7 +495,7 @@ class HospitalMapViewModel(
             val lang = _uiState.value.language
             val kind = _uiState.value.transferPreference.roomKind
             val route = withContext(Dispatchers.Default) {
-                findHospitalRouteUseCase(start.id, dest.id, lang, kind, preferRemote = true)
+                findHospitalRouteUseCase(start.id, dest.id, lang, kind, preferRemote = true, destName = dest.name)
             }
             val steps = route?.let { RouteStepFormatter.build(it, roomsById, lang) } ?: emptyList()
             _uiState.update {
@@ -493,6 +508,7 @@ class HospitalMapViewModel(
                     selectedFloorLevel = if (focusMapOnRoute && route != null) focusLevelFor(route) else it.selectedFloorLevel
                 )
             }
+            if (route != null && !_uiState.value.isNavigating) placeAtRouteStart(route)
         }
     }
 

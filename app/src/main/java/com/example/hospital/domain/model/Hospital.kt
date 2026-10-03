@@ -52,6 +52,9 @@ data class Room(
     val floorId: String = "tang-$floorLevel"
 )
 
+/** A spot tapped on the map (corridor), not a real room. See HospitalMapViewModel.spotRoom. */
+val Room.isSpot: Boolean get() = '@' in id
+
 data class PinnedPoint(
     val floorId: String,
     val floorLevel: Int,

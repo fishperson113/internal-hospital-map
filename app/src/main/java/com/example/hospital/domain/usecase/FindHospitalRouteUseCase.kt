@@ -20,7 +20,8 @@ class FindHospitalRouteUseCase(
         language: AppLanguage = AppLanguage.VIETNAMESE,
         // null = any shaft (fastest); "elevator" or "stair" = only use that kind to change floors
         preferredTransferKind: String? = null,
-        preferRemote: Boolean = false
+        preferRemote: Boolean = false,
+        destName: String? = null
     ): HospitalRoute? {
         val mapData = repository.getHospitalMap().first()
         val graph = mapData.graph
@@ -33,12 +34,13 @@ class FindHospitalRouteUseCase(
             val destFloorId = destRoom?.floorId ?: "tang-${destRoom?.floorLevel ?: 2}"
             val startId = startRoom?.rawId?.toString() ?: startRoomOrNodeId.substringAfterLast('_').substringAfterLast(':')
             val destId = destRoom?.rawId?.toString() ?: destRoomOrNodeId.substringAfterLast('_').substringAfterLast(':')
-            val fromParam = "$startFloorId:$startId"
-            val toParam = "$destFloorId:$destId"
+            // A tapped spot already has the server's "floor@x,y" form as its id.
+            val fromParam = if ('@' in startRoomOrNodeId) startRoomOrNodeId else "$startFloorId:$startId"
+            val toParam = if ('@' in destRoomOrNodeId) destRoomOrNodeId else "$destFloorId:$destId"
             val prefParam = preferredTransferKind ?: "any"
 
             val remoteResult = try {
-                repository.fetchRoute(fromParam, toParam, prefParam, destRoom?.name, language)
+                repository.fetchRoute(fromParam, toParam, prefParam, destRoom?.name ?: destName, language)
             } catch (_: Exception) {
                 null
             }

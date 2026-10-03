@@ -58,6 +58,7 @@ import com.example.hospital.domain.model.Floor
 import com.example.hospital.domain.model.HospitalRoute
 import com.example.hospital.domain.model.Point2D
 import com.example.hospital.domain.model.Room
+import com.example.hospital.domain.model.isSpot
 import com.example.hospital.presentation.util.AppLanguage
 import com.example.hospital.presentation.util.HospitalLocalization
 import com.example.ui.theme.MapAmber
@@ -104,7 +105,7 @@ fun HospitalCanvasMap(
     isAutoRotateEnabled: Boolean = false,
     onRoomClick: (Room) -> Unit,
     onSelectFloor: (Int?) -> Unit,
-    onEmptyTap: () -> Unit,
+    onEmptyTap: (Point2D?) -> Unit, // plan point tapped outside rooms (2D), null in 3D
     modifier: Modifier = Modifier
 ) {
     val textMeasurer = rememberTextMeasurer(cacheSize = 256)
@@ -250,14 +251,14 @@ fun HospitalCanvasMap(
                             val v = floorVisuals[f.level] ?: return@firstOrNull false
                             pointInPolygon(p, plateCorners(planW, planH).map { pj.project(it.x, it.y, v.z) })
                         }
-                        if (hit != null) latestOnSelectFloor(hit.level) else latestOnEmptyTap()
+                        if (hit != null) latestOnSelectFloor(hit.level) else latestOnEmptyTap(null)
                     } else {
                         val floor = sortedFloors.firstOrNull { it.level == selectedFloorLevel }
                         val world = pj.unproject(p.x, p.y)
                         val room = if (floor != null && !floor.isTodo && world != null) {
                             floor.rooms.lastOrNull { it.polygon.size >= 3 && pointInPolygon(world.x, world.y, it.polygon) }
                         } else null
-                        if (room != null) latestOnRoomClick(room) else latestOnEmptyTap()
+                        if (room != null) latestOnRoomClick(room) else latestOnEmptyTap(world)
                     }
                 }
             }
@@ -286,6 +287,15 @@ fun HospitalCanvasMap(
                     drawTransferLink(currentRoute, floorVisuals, pj, oa)
                 }
                 drawRoutePins(currentRoute, floorVisuals, pj, oa, elevatorPainter, stairsPainter)
+                selectedRoom?.takeIf { it.isSpot }?.let { spot -> // tapped corridor spot (web: blue pin)
+                    val p = spot.labelAt
+                    val v = floorVisuals[spot.floorLevel]
+                    if (p != null && v != null && v.alpha > 0.5f) {
+                        val o = pj.project(p.x, p.y, v.z)
+                        drawCircle(Color.White, 9.dp.toPx(), o, alpha = oa)
+                        drawCircle(MapBluePrimary, 6.dp.toPx(), o, alpha = oa)
+                    }
+                }
                 if (userPosition != null && userFloorLevel != null) {
                     drawUserLocationWithHeading(
                         position = userPosition,
@@ -496,7 +506,7 @@ private fun DrawScope.drawRoutePins(
     stairsPainter: VectorPainter
 ) {
     val r = route ?: return
-    val first = r.segments.firstOrNull() ?: return
+    if (r.segments.isEmpty()) return
     val last = r.segments.last()
     fun visible(level: Int) = (vis[level]?.alpha ?: 0f) > 0.5f
     fun z(level: Int) = vis[level]?.z ?: 0f
@@ -515,13 +525,7 @@ private fun DrawScope.drawRoutePins(
             }
         }
     }
-    if (visible(first.floorLevel) && first.points.isNotEmpty()) {
-        val p = first.points.first()
-        val o = pj.project(p.x, p.y, z(first.floorLevel))
-        drawCircle(Color.Black.copy(alpha = 0.18f), 10.dp.toPx(), o + Offset(0f, 1.dp.toPx()), alpha = alpha)
-        drawCircle(Color.White, 9.dp.toPx(), o, alpha = alpha)
-        drawCircle(MapGreenSuccess, 6.dp.toPx(), o, alpha = alpha)
-    }
+    // No separate start pin: the user's dot sits on the route start (one marker, like the web).
     if (visible(last.floorLevel) && last.points.isNotEmpty()) {
         val p = last.points.last()
         val o = pj.project(p.x, p.y, z(last.floorLevel))
