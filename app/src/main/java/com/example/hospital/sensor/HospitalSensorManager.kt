@@ -1,19 +1,11 @@
 package com.example.hospital.sensor
 
-import android.Manifest
-import android.annotation.SuppressLint
 import android.content.Context
-import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
-import android.os.Bundle
 import android.os.SystemClock
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,7 +19,6 @@ data class HospitalSensorData(
     val stepEventTrigger: Long = 0L, // timestamp of last step to react to
     val pressureHpa: Float? = null,
     val floorChangeHint: Int = 0, // +1 if climbed up, -1 if went down based on barometer
-    val gpsLocation: Location? = null,
     val isTracking: Boolean = false,
     val activeSensors: List<String> = emptyList()
 )
@@ -35,14 +26,14 @@ data class HospitalSensorData(
 /**
  * Manages all mobile sensors for real-time indoor navigation:
  * - Compass / Orientation: Rotation Vector (preferred) or Accelerometer + Magnetometer.
- * - Steps: Hardware Step Detector / Step Counter + Fallback Accelerometer peak detection.
+ * - Steps: ONE source, so a step is never counted twice: hardware Step Detector, else
+ *   Linear Acceleration peaks, else raw Accelerometer peaks.
  * - Floor / Altitude: Barometer (Pressure Sensor) tracking elevation changes.
- * - Geolocation: GPS and Network location providers.
+ * No GPS: indoors it jumps around and used to inject fake steps.
  */
-class HospitalSensorManager(val context: Context) : SensorEventListener, LocationListener {
+class HospitalSensorManager(val context: Context) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-    private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
 
     private val _sensorData = MutableStateFlow(HospitalSensorData())
     val sensorData: StateFlow<HospitalSensorData> = _sensorData.asStateFlow()
@@ -53,7 +44,6 @@ class HospitalSensorManager(val context: Context) : SensorEventListener, Locatio
     private val accelerometerSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val magneticSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
     private val stepDetectorSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
-    private val stepCounterSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
     private val linearAccelSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
     private val gyroscopeSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
     private val orientationSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ORIENTATION)
@@ -67,10 +57,7 @@ class HospitalSensorManager(val context: Context) : SensorEventListener, Locatio
     private var hasAccelerometer = false
     private var hasMagnetometer = false
 
-    // Hardware Step Counter tracking
-    private var initialStepCounterValue: Int? = null
-    private var lastReportedStepCounterValue: Int? = null
-
+    private var stepSource: Int? = null // sensor type that counts steps
     // Accelerometer / Linear Acceleration fallback step detector
     private var lastAccelMagnitude = 9.8f
     private var lastStepTimeMs = 0L
@@ -87,10 +74,6 @@ class HospitalSensorManager(val context: Context) : SensorEventListener, Locatio
     private var currentFilteredHeading: Float = 0f
     private var stepSequenceNumber: Long = 0L
 
-    // Location distance tracking
-    private var lastGpsLocation: Location? = null
-
-    @SuppressLint("MissingPermission")
     fun startTracking() {
         if (sensorManager == null) return
 
@@ -115,29 +98,17 @@ class HospitalSensorManager(val context: Context) : SensorEventListener, Locatio
             active += "Gyroscope"
         }
 
-        // 3. Step Sensors
-        var hardwareStepRegistered = false
-        if (stepDetectorSensor != null) {
-            hardwareStepRegistered = sensorManager.registerListener(this, stepDetectorSensor, SensorManager.SENSOR_DELAY_UI)
-            if (hardwareStepRegistered) active += "Step Detector"
+        // 3. Steps: first sensor that registers wins. Accelerometer is registered anyway for the compass fallback.
+        stepSource = when {
+            stepDetectorSensor != null && sensorManager.registerListener(this, stepDetectorSensor, SensorManager.SENSOR_DELAY_UI) -> Sensor.TYPE_STEP_DETECTOR
+            linearAccelSensor != null && sensorManager.registerListener(this, linearAccelSensor, SensorManager.SENSOR_DELAY_UI) -> Sensor.TYPE_LINEAR_ACCELERATION
+            accelerometerSensor != null && sensorManager.registerListener(this, accelerometerSensor, SensorManager.SENSOR_DELAY_UI) -> Sensor.TYPE_ACCELEROMETER
+            else -> null
         }
-        if (stepCounterSensor != null) {
-            sensorManager.registerListener(this, stepCounterSensor, SensorManager.SENSOR_DELAY_UI)
-            active += "Step Counter"
-        }
-
-        // Linear Acceleration (gravity-removed) for precise step detection
-        if (linearAccelSensor != null) {
-            sensorManager.registerListener(this, linearAccelSensor, SensorManager.SENSOR_DELAY_UI)
-            active += "Linear Accel PDR"
-        }
-
-        // Accelerometer fallback step detection
-        if (accelerometerSensor != null) {
-            sensorManager.registerListener(this, accelerometerSensor, SensorManager.SENSOR_DELAY_UI)
-            if (!hardwareStepRegistered && linearAccelSensor == null) {
-                active += "Accelerometer PDR"
-            }
+        when (stepSource) {
+            Sensor.TYPE_STEP_DETECTOR -> active += "Step Detector"
+            Sensor.TYPE_LINEAR_ACCELERATION -> active += "Linear Accel PDR"
+            Sensor.TYPE_ACCELEROMETER -> active += "Accelerometer PDR"
         }
 
         // 4. Barometer for vertical floor elevation change detection
@@ -145,9 +116,6 @@ class HospitalSensorManager(val context: Context) : SensorEventListener, Locatio
             sensorManager.registerListener(this, pressureSensor, SensorManager.SENSOR_DELAY_NORMAL)
             active += "Barometer"
         }
-
-        // 5. GPS & Network Location
-        registerLocationUpdates(active)
 
         _sensorData.update {
             it.copy(
@@ -157,37 +125,8 @@ class HospitalSensorManager(val context: Context) : SensorEventListener, Locatio
         }
     }
 
-    fun refreshPermissions() {
-        startTracking()
-    }
-
-    private fun registerLocationUpdates(activeList: MutableList<String>) {
-        if (locationManager == null) return
-        val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-
-        if (hasFine || hasCoarse) {
-            try {
-                if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                    locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1500L, 1.5f, this)
-                    activeList += "GPS"
-                }
-                if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                    locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2500L, 3f, this)
-                    activeList += "Network Location"
-                }
-            } catch (_: SecurityException) {
-                // Handled gracefully
-            }
-        }
-    }
-
     fun stopTracking() {
         sensorManager?.unregisterListener(this)
-        try {
-            locationManager?.removeUpdates(this)
-        } catch (_: Exception) {}
-
         _sensorData.update { it.copy(isTracking = false) }
     }
 
@@ -240,13 +179,11 @@ class HospitalSensorManager(val context: Context) : SensorEventListener, Locatio
                 if (hasMagnetometer && rotationVectorSensor == null) {
                     computeHeadingFromAccMag()
                 }
-                // Fallback step detection using dynamic magnitude acceleration peaks
-                detectStepFromAccelerometer(event.values)
+                if (stepSource == Sensor.TYPE_ACCELEROMETER) detectStepFromAccelerometer(event.values)
             }
 
             Sensor.TYPE_LINEAR_ACCELERATION -> {
-                // Values represent acceleration without gravity (x, y, z)
-                detectStepFromLinearAcceleration(event.values)
+                if (stepSource == Sensor.TYPE_LINEAR_ACCELERATION) detectStepFromLinearAcceleration(event.values)
             }
 
             Sensor.TYPE_MAGNETIC_FIELD -> {
@@ -259,23 +196,6 @@ class HospitalSensorManager(val context: Context) : SensorEventListener, Locatio
 
             Sensor.TYPE_STEP_DETECTOR -> {
                 registerStep()
-            }
-
-            Sensor.TYPE_STEP_COUNTER -> {
-                val currentCount = event.values[0].toInt()
-                if (initialStepCounterValue == null) {
-                    initialStepCounterValue = currentCount
-                    lastReportedStepCounterValue = currentCount
-                } else {
-                    val delta = currentCount - (lastReportedStepCounterValue ?: currentCount)
-                    if (delta in 1..20) {
-                        lastReportedStepCounterValue = currentCount
-                        repeat(delta) { registerStep() }
-                    } else if (delta > 20) {
-                        lastReportedStepCounterValue = currentCount
-                        registerStep()
-                    }
-                }
             }
 
             Sensor.TYPE_PRESSURE -> {
@@ -351,32 +271,4 @@ class HospitalSensorManager(val context: Context) : SensorEventListener, Locatio
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-
-    // LocationListener callbacks
-    override fun onLocationChanged(location: Location) {
-        val last = lastGpsLocation
-        if (last != null) {
-            val dist = location.distanceTo(last)
-            // If GPS detects walking movement > 1.8 meters, trigger step update
-            if (dist >= 1.8f && dist < 30f) {
-                lastGpsLocation = location
-                val stepsFromGps = (dist / 0.7f).toInt().coerceIn(1, 4)
-                repeat(stepsFromGps) { registerStep() }
-            }
-        } else {
-            lastGpsLocation = location
-        }
-
-        // Fuse GPS bearing if moving
-        if (location.hasBearing() && location.hasSpeed() && location.speed > 0.6f) {
-            updateHeading(location.bearing)
-        }
-
-        _sensorData.update { it.copy(gpsLocation = location) }
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-    override fun onProviderEnabled(provider: String) {}
-    override fun onProviderDisabled(provider: String) {}
 }

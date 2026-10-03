@@ -87,22 +87,18 @@ fun HospitalMapScreen(
     var topBlockBottomPx by remember { mutableFloatStateOf(0f) }
     var bottomSheetPx by remember { mutableFloatStateOf(0f) }
 
-    // Request device sensors and location permissions
+    // Step detector needs ACTIVITY_RECOGNITION on Android 10+. No location: position comes from
+    // the start place the user picks plus step + compass dead reckoning.
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
+        ActivityResultContracts.RequestPermission()
     ) {
         viewModel.onPermissionsUpdated()
     }
 
     LaunchedEffect(Unit) {
-        val permissions = mutableListOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            permissions.add(Manifest.permission.ACTIVITY_RECOGNITION)
+            permissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
         }
-        permissionLauncher.launch(permissions.toTypedArray())
     }
 
     val hasRoute = ui.startRoom != null && ui.destRoom != null

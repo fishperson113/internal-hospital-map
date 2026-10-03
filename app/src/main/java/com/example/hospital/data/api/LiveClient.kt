@@ -3,7 +3,6 @@ package com.example.hospital.data.api
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -37,12 +36,12 @@ class LiveClient(
         .build()
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var ws: WebSocket? = null
-    private var isConnected = false
-    private var isClosedManually = false
-    private var lastSentState = ""
-    private var lastSendTimeMs = 0L
-    private var pendingHelp = false
+    // Written from OkHttp's thread and the main thread.
+    @Volatile private var ws: WebSocket? = null
+    @Volatile private var isConnected = false
+    @Volatile private var isClosedManually = false
+    @Volatile private var lastState: String? = null // re-sent on every (re)connect
+    @Volatile private var pendingHelp = false
 
     private fun getOrCreateSessionId(): String {
         var id = prefs?.getString(KEY_SESSION_ID, null) ?: inMemorySessionId
@@ -65,7 +64,7 @@ class LiveClient(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket connected ($sessionId)")
                 isConnected = true
-                lastSentState = ""
+                lastState?.let(webSocket::send)
 
                 if (pendingHelp) {
                     webSocket.send("""{"type":"help"}""")
@@ -113,23 +112,10 @@ class LiveClient(
         }, 2000L)
     }
 
-    /**
-     * Send state update to server.
-     * Throttles normal movement updates to max 2 per second.
-     */
-    fun sendState(stateJson: String, isMajorChange: Boolean = false) {
-        val now = SystemClock.uptimeMillis()
-        if (!isMajorChange && (now - lastSendTimeMs < 500L)) {
-            return
-        }
-        if (stateJson == lastSentState) return
-
-        if (ws?.send(stateJson) == true) {
-            lastSentState = stateJson
-            lastSendTimeMs = now
-        } else if (!isConnected && !isClosedManually) {
-            connect()
-        }
+    /** Send the patient state; connects first if needed (onOpen then sends it). */
+    fun sendState(stateJson: String) {
+        lastState = stateJson
+        if (!isConnected) connect() else ws?.send(stateJson)
     }
 
     /**
@@ -137,11 +123,7 @@ class LiveClient(
      */
     fun askHelp() {
         pendingHelp = true
-        if (isConnected && ws?.send("""{"type":"help"}""") == true) {
-            Log.d(TAG, "Sent help request")
-        } else {
-            connect()
-        }
+        if (!isConnected) connect() else ws?.send("""{"type":"help"}""")
     }
 
     fun disconnect() {

@@ -81,6 +81,16 @@ class IndoorPdrTracker(
     private var stepsCountedInSegment = 0
     private var segmentStartDistanceM = 0f
 
+    /**
+     * Start free dead reckoning at the place the user said they are (no route yet).
+     * ponytail: no wall/corridor-graph snapping without a route; north offset is the last one a
+     * route calibrated for this floor (0 = compass north is "up" on the plan until then).
+     */
+    fun startAt(position: Point2D, floorLevel: Int, floorId: String): IndoorPdrState {
+        currentRoute = null
+        return IndoorPdrState(position = position, floorLevel = floorLevel, floorId = floorId).also { state = it }
+    }
+
     fun initialize(route: HospitalRoute): IndoorPdrState {
         currentRoute = route
         metersPerPx = route.assumptions.metersPerPx.toFloat().coerceAtLeast(0.01f)
@@ -113,9 +123,13 @@ class IndoorPdrTracker(
     /**
      * Advances user position by 1 step given the compass heading.
      */
-    fun onStep(compassDeg: Float? = null): IndoorPdrState? {
+    fun onStep(compassDeg: Float): IndoorPdrState? {
         val s = state ?: return null
-        val route = currentRoute ?: return s
+        val route = currentRoute
+        if (route == null) {
+            val heading = snapToCorridor((compassDeg - getSavedNorth(s.floorId) + 360f) % 360f)
+            return s.copy(position = advance(s.position, heading), planHeadingDeg = heading).also { state = it }
+        }
         if (s.hasArrived) return s
 
         val segments = route.segments
@@ -129,7 +143,7 @@ class IndoorPdrTracker(
         stepsCountedInSegment++
 
         // 1. Calibrate northDeg if needed on initial steps
-        val effectiveCompassDeg = compassDeg ?: 0f
+        val effectiveCompassDeg = compassDeg
         if (!isNorthCalibrated && points.size >= 2) {
             initialCompassSamples.add(effectiveCompassDeg)
             if (initialCompassSamples.size >= 3) {
@@ -151,10 +165,9 @@ class IndoorPdrTracker(
         // 4. Advance position according to heading
         // val px = stepLengthM / metersPerPx
         // x += px * sin(rad), y -= px * cos(rad)
-        val px = (stepLengthM / metersPerPx).coerceAtLeast(1f)
-        val rad = Math.toRadians(planHeading.toDouble())
-        var newX = (s.position.x + px * sin(rad)).toFloat()
-        var newY = (s.position.y - px * cos(rad)).toFloat()
+        val moved = advance(s.position, planHeading)
+        var newX = moved.x
+        var newY = moved.y
 
         // 5. Route snapping: pull to nearest point on polyline if within 40 px (~3m)
         val (closestPt, distToRoute) = HospitalGeometry.closestPointOnPolyline(points, newX, newY)
@@ -236,6 +249,13 @@ class IndoorPdrTracker(
         )
         state = updated
         return updated
+    }
+
+    /** One step along planHeading (0 = up, clockwise): x += px * sin, y -= px * cos. */
+    private fun advance(p: Point2D, planHeading: Float): Point2D {
+        val px = (stepLengthM / metersPerPx).coerceAtLeast(1f)
+        val rad = Math.toRadians(planHeading.toDouble())
+        return Point2D((p.x + px * sin(rad)).toFloat(), (p.y - px * cos(rad)).toFloat())
     }
 
     /**
