@@ -49,7 +49,8 @@ class HospitalMapViewModel(
     private var searchJob: Job? = null
     private var sensorJob: Job? = null
     private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker()
-    private var lastObservedStepTrigger: Long = 0L
+    private var lastWalkedMeters = 0f
+    private var pressureAtStart: Float? = null // barometer when the walk on the start floor began
     private var live = false // like the web: the CRM sees the user once they pick a place / start / ask help
     private val liveClient = com.example.hospital.data.api.LiveClient(context = sensorManager?.context) { status ->
         _uiState.update { it.copy(helpStatus = status) }
@@ -71,39 +72,52 @@ class HospitalMapViewModel(
         sensorJob?.cancel()
         sensorJob = viewModelScope.launch {
             sensorManager?.sensorData?.collect { data ->
+                // While directions are on, meters walked slide the dot along the route;
+                // gyro turns snap it to / hold it at corners (IndoorPdrTracker).
+                val dm = data.walkedMeters - lastWalkedMeters
+                lastWalkedMeters = data.walkedMeters
+                if (dm > 0f && _uiState.value.isNavigating) {
+                    pdrTracker.onWalked(dm, data.yawDegrees)?.let(::applyPdrUpdate)
+                }
                 val heading = data.headingDegrees
-                val isTracking = data.isTracking
-
-                // Format telemetry display (Heading, Steps, Pressure, Sensors)
-                val headingCompass = getCompassDirection(heading)
-                val tele = buildString {
-                    append("${heading.toInt()}° $headingCompass")
-                    if (data.totalSteps > 0) append(" · ${data.totalSteps} bước")
-                    if (data.pressureHpa != null) append(" · ${data.pressureHpa.toInt()} hPa")
-                    if (data.activeSensors.isNotEmpty()) append(" · ${data.activeSensors.size} cảm biến")
-                }
-
-                // While directions are on, each step slides the dot along the route
-                if (data.stepEventTrigger > lastObservedStepTrigger) {
-                    val stepDelta = (data.stepEventTrigger - lastObservedStepTrigger).toInt().coerceIn(1, 10)
-                    lastObservedStepTrigger = data.stepEventTrigger
-                    if (_uiState.value.isNavigating) {
-                        var last: com.example.hospital.sensor.IndoorPdrState? = null
-                        repeat(stepDelta) { pdrTracker.onStep()?.let { last = it } }
-                        last?.let(::applyPdrUpdate)
-                    }
-                }
-
+                val d = data.diag
                 _uiState.update {
                     it.copy(
                         userHeadingDegrees = heading,
                         stepCount = data.totalSteps,
-                        isSensorTrackingActive = isTracking,
-                        sensorTelemetryText = tele
+                        isSensorTrackingActive = data.isTracking,
+                        sensorTelemetryText = "${heading.toInt()}° ${getCompassDirection(heading)} · ${data.totalSteps} bước · ${"%.1f".format(data.walkedMeters)} m",
+                        sensorDiagnostics = listOf(
+                            "Gia tốc ${d.accelHz} Hz · tự đếm ${d.accelSteps} bước · bước cuối ${"%.2f".format(d.lastStepM)} m",
+                            "Phần cứng: detector ${d.hwDetectorSteps} · counter ${d.hwCounterSteps} · bù +${d.catchUpSteps} · bỏ ${d.skippedSteps}",
+                            "Gyro ${data.yawDegrees?.let { y -> "%.0f°".format(y) } ?: "—"} · áp suất ${data.pressureHpa?.let { p -> "%.2f hPa".format(p) } ?: "—"}",
+                            "Cảm biến: ${data.activeSensors.joinToString()}"
+                        ).joinToString("\n"),
+                        floorChangeSuggested = floorChangeSuggested(it, data.pressureHpa)
                     )
                 }
             }
         }
+    }
+
+    /**
+     * Barometer hint: during the steps before arriving on the new floor, the pressure changed by
+     * about the floors to climb (~0.4 hPa per floor, up = lower pressure). Floors still change
+     * only by the button; this just points at it.
+     */
+    private fun floorChangeSuggested(s: HospitalMapUiState, p: Float?): Boolean {
+        val t = s.currentRoute?.transfer ?: return false
+        val p0 = pressureAtStart ?: return false
+        if (!s.isNavigating || s.navStepIndex > 1 || p == null) return false
+        val floors = t.roomB.floorLevel - t.roomA.floorLevel
+        if (floors == 0) return false
+        val climbed = (p0 - p) * (if (floors > 0) 1f else -1f)
+        return climbed >= FLOOR_HINT_HPA * kotlin.math.abs(floors)
+    }
+
+    companion object {
+        const val FLOOR_HINT_HPA = 0.3f // calibration knob: pressure change per floor that triggers the hint
+        const val TEST_STEP_M = 0.65f   // "+1 bước" test button
     }
 
     fun onPermissionsUpdated() {
@@ -341,6 +355,7 @@ class HospitalMapViewModel(
         if (steps.isEmpty()) return
         goLive()
         val initialPdr = route?.let(pdrTracker::initialize)
+        pressureAtStart = sensorManager?.sensorData?.value?.pressureHpa
 
         _uiState.update {
             it.copy(
@@ -373,11 +388,12 @@ class HospitalMapViewModel(
         val prev = s.navStepIndex - 1
         _uiState.update { it.copy(navStepIndex = prev, selectedFloorLevel = s.routeSteps[prev].focusFloorLevel) }
         pdrTracker.goToStep(prev)?.let(::applyPdrUpdate)
+        if (prev == 0) pressureAtStart = sensorManager?.sensorData?.value?.pressureHpa
     }
 
     fun onSimulateStep() {
         if (!_uiState.value.isNavigating) return
-        pdrTracker.onStep()?.let(::applyPdrUpdate)
+        pdrTracker.onWalked(TEST_STEP_M, yawDeg = null)?.let(::applyPdrUpdate)
     }
 
     fun onToggleAutoRotate() {

@@ -1,273 +1,231 @@
 package com.example.hospital.sensor
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlin.math.abs
-import kotlin.math.sqrt
+import kotlin.math.atan2
 
 data class HospitalSensorData(
-    val headingDegrees: Float = 0f,
-    val totalSteps: Int = 0,
-    val stepEventTrigger: Long = 0L, // timestamp of last step to react to
-    val pressureHpa: Float? = null,
-    val floorChangeHint: Int = 0, // +1 if climbed up, -1 if went down based on barometer
+    val headingDegrees: Float = 0f,  // compass (absolute), only for the arrow / map rotation
+    val yawDegrees: Float? = null,   // gyro heading (relative, continuous, clockwise) for turn matching
+    val totalSteps: Int = 0,         // steps that moved the dot
+    val walkedMeters: Float = 0f,    // sum of their lengths
+    val pressureHpa: Float? = null,  // smoothed barometer
     val isTracking: Boolean = false,
-    val activeSensors: List<String> = emptyList()
+    val activeSensors: List<String> = emptyList(),
+    val diag: SensorDiagnostics = SensorDiagnostics()
+)
+
+/** Raw counters for the on-site tuning panel (like phyphox). */
+data class SensorDiagnostics(
+    val accelHz: Int = 0,
+    val accelSteps: Int = 0,      // own accelerometer detector
+    val hwDetectorSteps: Int = 0, // TYPE_STEP_DETECTOR events
+    val hwCounterSteps: Int = 0,  // TYPE_STEP_COUNTER since start
+    val catchUpSteps: Int = 0,    // added because the hardware counted more
+    val skippedSteps: Int = 0,    // dropped because the hardware counted fewer
+    val lastStepM: Float = 0f
 )
 
 /**
- * Manages all mobile sensors for real-time indoor navigation:
- * - Compass / Orientation: Rotation Vector (preferred) or Accelerometer + Magnetometer.
- * - Steps: ONE source, so a step is never counted twice: hardware Step Detector, else
- *   Linear Acceleration peaks, else raw Accelerometer peaks.
- * - Floor / Altitude: Barometer (Pressure Sensor) tracking elevation changes.
- * No GPS: indoors it jumps around and used to inject fake steps.
+ * Indoor motion from phone sensors only (no GPS):
+ * - Steps: own accelerometer detector ([StepDetector]) is the main source: instant and not
+ *   dependent on vendor step sensors. Hardware STEP_COUNTER (else STEP_DETECTOR) cross-checks it:
+ *   if the hardware counted more, the missing steps are added; if it counted fewer once the user
+ *   has stood still long enough for the counter to catch up (~10 s lag), the extra steps are
+ *   skipped from the next ones.
+ * - Turns: GAME_ROTATION_VECTOR (gyro + accelerometer, no magnetometer, so steel and elevators do
+ *   not bend it). Falls back to ROTATION_VECTOR.
+ * - Compass: ROTATION_VECTOR, only for the heading arrow.
+ * - Barometer: smoothed pressure, used to suggest a floor change.
  */
 class HospitalSensorManager(val context: Context) : SensorEventListener {
+    companion object {
+        const val STEP_TOLERANCE = 2         // own vs hardware count difference that is ignored
+        const val COUNTER_SETTLE_MS = 12_000L // STEP_COUNTER may lag up to ~10 s
+    }
 
-    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    private val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
 
     private val _sensorData = MutableStateFlow(HospitalSensorData())
     val sensorData: StateFlow<HospitalSensorData> = _sensorData.asStateFlow()
 
-    // Sensors
-    private val rotationVectorSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-        ?: sensorManager?.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
-    private val accelerometerSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-    private val magneticSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
-    private val stepDetectorSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
-    private val linearAccelSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
-    private val gyroscopeSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-    private val orientationSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ORIENTATION)
-    private val pressureSensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_PRESSURE)
+    private val accel = sm?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    private val gameRotation = sm?.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+    private val rotation = sm?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        ?: sm?.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
+    private val stepDetector = sm?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+    private val stepCounter = sm?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+    private val pressure = sm?.getDefaultSensor(Sensor.TYPE_PRESSURE)
 
-    // State calculations
-    private val rotationMatrix = FloatArray(9)
-    private val orientationAngles = FloatArray(3)
-    private val lastAccelerometer = FloatArray(3)
-    private val lastMagnetometer = FloatArray(3)
-    private var hasAccelerometer = false
-    private var hasMagnetometer = false
+    private val detector = StepDetector()
+    private val rot = FloatArray(9)
 
-    private var stepSource: Int? = null // sensor type that counts steps
-    // Accelerometer / Linear Acceleration fallback step detector
-    private var lastAccelMagnitude = 9.8f
-    private var lastStepTimeMs = 0L
-    private var accelStepPeakDetected = false
+    // Step fusion. All callbacks run on the main thread.
+    private var accelSteps = 0
+    private var hwDetector = 0
+    private var hwCounterBase = -1
+    private var hwCounter = 0
+    private var lastOwnStepMs = 0L
+    private var emitted = 0
+    private var walked = 0f
+    private var catchUp = 0
+    private var skipped = 0
+    private var skipDebt = 0
+    private var lastLen = 0.65f
 
-    // Linear acceleration step detection
-    private var linearStepTroughDetected = false
-    private var lastLinearStepTimeMs = 0L
+    private var yaw: Float? = null
+    private var lastRawYaw = 0f
+    private var compass = 0f
+    private var accelCount = 0
+    private var accelHz = 0
+    private var rateWindowMs = 0L
+    private var lastPublishMs = 0L
+    private var pressureHpa: Float? = null
 
-    // Barometer tracking
-    private var baselinePressureHpa: Float? = null
-
-    // Filtered heading
-    private var currentFilteredHeading: Float = 0f
-    private var stepSequenceNumber: Long = 0L
-
+    /** Safe to call again (e.g. after the ACTIVITY_RECOGNITION permission is granted). */
     fun startTracking() {
-        if (sensorManager == null) return
-
+        val m = sm ?: return
+        m.unregisterListener(this)
         val active = mutableListOf<String>()
-
-        // 1. Compass / Rotation
-        if (rotationVectorSensor != null) {
-            sensorManager.registerListener(this, rotationVectorSensor, SensorManager.SENSOR_DELAY_UI)
-            active += "Rotation Vector"
-        } else if (accelerometerSensor != null && magneticSensor != null) {
-            sensorManager.registerListener(this, accelerometerSensor, SensorManager.SENSOR_DELAY_UI)
-            sensorManager.registerListener(this, magneticSensor, SensorManager.SENSOR_DELAY_UI)
-            active += "Compass (Acc+Mag)"
-        } else if (orientationSensor != null) {
-            sensorManager.registerListener(this, orientationSensor, SensorManager.SENSOR_DELAY_UI)
-            active += "Orientation Sensor"
+        fun reg(s: Sensor?, rate: Int, name: String) {
+            if (s != null && m.registerListener(this, s, rate)) active += name
         }
-
-        // 2. Gyroscope for instantaneous rotational stability
-        if (gyroscopeSensor != null) {
-            sensorManager.registerListener(this, gyroscopeSensor, SensorManager.SENSOR_DELAY_UI)
-            active += "Gyroscope"
+        reg(accel, SensorManager.SENSOR_DELAY_GAME, "Accelerometer") // ~50 Hz
+        reg(gameRotation ?: rotation, SensorManager.SENSOR_DELAY_GAME, if (gameRotation != null) "Gyro" else "Rotation")
+        if (gameRotation != null) reg(rotation, SensorManager.SENSOR_DELAY_UI, "Compass")
+        if (hasActivityPermission()) {
+            reg(stepCounter, SensorManager.SENSOR_DELAY_NORMAL, "Step Counter")
+            reg(stepDetector, SensorManager.SENSOR_DELAY_NORMAL, "Step Detector")
         }
-
-        // 3. Steps: first sensor that registers wins. Accelerometer is registered anyway for the compass fallback.
-        stepSource = when {
-            stepDetectorSensor != null && sensorManager.registerListener(this, stepDetectorSensor, SensorManager.SENSOR_DELAY_UI) -> Sensor.TYPE_STEP_DETECTOR
-            linearAccelSensor != null && sensorManager.registerListener(this, linearAccelSensor, SensorManager.SENSOR_DELAY_UI) -> Sensor.TYPE_LINEAR_ACCELERATION
-            accelerometerSensor != null && sensorManager.registerListener(this, accelerometerSensor, SensorManager.SENSOR_DELAY_UI) -> Sensor.TYPE_ACCELEROMETER
-            else -> null
-        }
-        when (stepSource) {
-            Sensor.TYPE_STEP_DETECTOR -> active += "Step Detector"
-            Sensor.TYPE_LINEAR_ACCELERATION -> active += "Linear Accel PDR"
-            Sensor.TYPE_ACCELEROMETER -> active += "Accelerometer PDR"
-        }
-
-        // 4. Barometer for vertical floor elevation change detection
-        if (pressureSensor != null) {
-            sensorManager.registerListener(this, pressureSensor, SensorManager.SENSOR_DELAY_NORMAL)
-            active += "Barometer"
-        }
-
-        _sensorData.update {
-            it.copy(
-                isTracking = true,
-                activeSensors = active
-            )
-        }
+        reg(pressure, SensorManager.SENSOR_DELAY_NORMAL, "Barometer")
+        _sensorData.update { it.copy(isTracking = true, activeSensors = active) }
     }
 
     fun stopTracking() {
-        sensorManager?.unregisterListener(this)
+        sm?.unregisterListener(this)
         _sensorData.update { it.copy(isTracking = false) }
     }
 
-    fun manualStepSimulation() {
-        registerStep()
+    private fun hasActivityPermission() = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        val e = event ?: return
+        val now = SystemClock.elapsedRealtime()
+        when (e.sensor.type) {
+            Sensor.TYPE_ACCELEROMETER -> {
+                accelCount++
+                if (now - rateWindowMs >= 1000) { accelHz = accelCount; accelCount = 0; rateWindowMs = now }
+                val steps = detector.onSample(e.timestamp, e.values[0], e.values[1], e.values[2])
+                for (len in steps) {
+                    accelSteps++
+                    lastOwnStepMs = now
+                    if (skipDebt > 0) { skipDebt--; skipped++ } else emit(len)
+                }
+                reconcile(now)
+                if (steps.isNotEmpty() || now - lastPublishMs > 250) publish(now)
+            }
+            Sensor.TYPE_GAME_ROTATION_VECTOR -> {
+                yaw = unwrap(azimuth(e.values))
+                if (rotation == null) compass = (lastRawYaw + 360f) % 360f
+            }
+            Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR -> {
+                val a = azimuth(e.values)
+                compass = (a + 360f) % 360f
+                if (gameRotation == null) yaw = unwrap(a)
+            }
+            Sensor.TYPE_STEP_DETECTOR -> { hwDetector++; reconcile(now) }
+            Sensor.TYPE_STEP_COUNTER -> {
+                val v = e.values[0].toInt()
+                if (hwCounterBase < 0) hwCounterBase = v
+                hwCounter = v - hwCounterBase
+                reconcile(now)
+            }
+            Sensor.TYPE_PRESSURE -> {
+                val p = e.values[0]
+                pressureHpa = pressureHpa?.let { it + (p - it) * 0.1f } ?: p
+            }
+        }
     }
 
-    private fun registerStep() {
-        stepSequenceNumber++
+    /** Hardware count: STEP_COUNTER is the most accurate once it has counted, else STEP_DETECTOR. */
+    private fun hwSteps(): Int? = when {
+        hwCounter > 0 -> hwCounter
+        hwDetector > 0 -> hwDetector
+        else -> null
+    }
+
+    private fun reconcile(now: Long) {
+        val hw = hwSteps() ?: return
+        val diff = hw - emitted
+        if (diff > STEP_TOLERANCE) {
+            // The accelerometer missed steps (odd carrying position): add them with the last length.
+            skipDebt = 0
+            val n = diff - STEP_TOLERANCE
+            repeat(n) { emit(lastLen) }
+            catchUp += n
+        } else if (diff < -STEP_TOLERANCE && now - lastOwnStepMs > COUNTER_SETTLE_MS) {
+            // Standing still and the hardware has settled with fewer: skip that many upcoming steps.
+            skipDebt = maxOf(skipDebt, -diff - STEP_TOLERANCE)
+        }
+    }
+
+    private fun emit(len: Float) {
+        emitted++
+        walked += len
+        lastLen = len
+    }
+
+    private fun publish(now: Long) {
+        lastPublishMs = now
         _sensorData.update {
             it.copy(
-                totalSteps = it.totalSteps + 1,
-                stepEventTrigger = stepSequenceNumber
+                headingDegrees = compass,
+                yawDegrees = yaw,
+                totalSteps = emitted,
+                walkedMeters = walked,
+                pressureHpa = pressureHpa,
+                diag = SensorDiagnostics(accelHz, accelSteps, hwDetector, hwCounter, catchUp, skipped, lastLen)
             )
         }
     }
 
-    override fun onSensorChanged(event: SensorEvent?) {
-        if (event == null) return
-
-        when (event.sensor.type) {
-            Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR -> {
-                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-                SensorManager.getOrientation(rotationMatrix, orientationAngles)
-                val azimuthRad = orientationAngles[0]
-                val deg = (Math.toDegrees(azimuthRad.toDouble()).toFloat() + 360f) % 360f
-                updateHeading(deg)
-            }
-
-            Sensor.TYPE_ORIENTATION -> {
-                if (rotationVectorSensor == null) {
-                    val azimuth = (event.values[0] + 360f) % 360f
-                    updateHeading(azimuth)
-                }
-            }
-
-            Sensor.TYPE_GYROSCOPE -> {
-                // Angular speed around z-axis in rad/s
-                val zRotSpeed = event.values[2]
-                if (abs(zRotSpeed) > 0.05f) {
-                    val degDelta = -Math.toDegrees(zRotSpeed.toDouble()).toFloat() * 0.02f
-                    val fastDeg = (currentFilteredHeading + degDelta + 360f) % 360f
-                    _sensorData.update { it.copy(headingDegrees = fastDeg) }
-                }
-            }
-
-            Sensor.TYPE_ACCELEROMETER -> {
-                System.arraycopy(event.values, 0, lastAccelerometer, 0, 3)
-                hasAccelerometer = true
-                if (hasMagnetometer && rotationVectorSensor == null) {
-                    computeHeadingFromAccMag()
-                }
-                if (stepSource == Sensor.TYPE_ACCELEROMETER) detectStepFromAccelerometer(event.values)
-            }
-
-            Sensor.TYPE_LINEAR_ACCELERATION -> {
-                if (stepSource == Sensor.TYPE_LINEAR_ACCELERATION) detectStepFromLinearAcceleration(event.values)
-            }
-
-            Sensor.TYPE_MAGNETIC_FIELD -> {
-                System.arraycopy(event.values, 0, lastMagnetometer, 0, 3)
-                hasMagnetometer = true
-                if (hasAccelerometer && rotationVectorSensor == null) {
-                    computeHeadingFromAccMag()
-                }
-            }
-
-            Sensor.TYPE_STEP_DETECTOR -> {
-                registerStep()
-            }
-
-            Sensor.TYPE_PRESSURE -> {
-                val hpa = event.values[0]
-                val base = baselinePressureHpa ?: run {
-                    baselinePressureHpa = hpa
-                    hpa
-                }
-                // 1 floor change is ~3.5 meters ≈ 0.4 hPa drop (ascent) or rise (descent)
-                val diff = base - hpa
-                var floorDelta = 0
-                if (diff > 0.35f) {
-                    floorDelta = 1 // higher elevation (upstairs)
-                } else if (diff < -0.35f) {
-                    floorDelta = -1 // lower elevation (downstairs)
-                }
-
-                _sensorData.update {
-                    it.copy(
-                        pressureHpa = hpa,
-                        floorChangeHint = floorDelta
-                    )
-                }
-            }
-        }
+    /**
+     * Horizontal direction the phone points to (clockwise degrees): its top edge when held flat,
+     * its back when held upright, whichever lies flatter, so both ways of holding it work.
+     */
+    private fun azimuth(v: FloatArray): Float {
+        SensorManager.getRotationMatrixFromVector(rot, v)
+        val topE = rot[1]; val topN = rot[4]
+        val backE = -rot[2]; val backN = -rot[5]
+        val useTop = topE * topE + topN * topN >= backE * backE + backN * backN
+        val e = if (useTop) topE else backE
+        val n = if (useTop) topN else backN
+        return Math.toDegrees(atan2(e.toDouble(), n.toDouble())).toFloat()
     }
 
-    private fun computeHeadingFromAccMag() {
-        if (SensorManager.getRotationMatrix(rotationMatrix, null, lastAccelerometer, lastMagnetometer)) {
-            SensorManager.getOrientation(rotationMatrix, orientationAngles)
-            val deg = (Math.toDegrees(orientationAngles[0].toDouble()).toFloat() + 360f) % 360f
-            updateHeading(deg)
-        }
-    }
-
-    private fun updateHeading(rawDegrees: Float) {
-        // Smooth exponential moving average across the 0/360 wrap
-        var diff = (rawDegrees - currentFilteredHeading) % 360f
-        if (diff > 180f) diff -= 360f
-        if (diff < -180f) diff += 360f
-        currentFilteredHeading = (currentFilteredHeading + diff * 0.25f + 360f) % 360f
-
-        _sensorData.update { it.copy(headingDegrees = currentFilteredHeading) }
-    }
-
-    private fun detectStepFromLinearAcceleration(values: FloatArray) {
-        // Look at vertical or dominant linear acceleration
-        val norm = sqrt(values[0] * values[0] + values[1] * values[1] + values[2] * values[2])
-        val now = SystemClock.uptimeMillis()
-
-        if (norm > 1.8f && !linearStepTroughDetected && (now - lastLinearStepTimeMs) > 300) {
-            linearStepTroughDetected = true
-            lastLinearStepTimeMs = now
-            registerStep()
-        } else if (norm < 0.6f) {
-            linearStepTroughDetected = false
-        }
-    }
-
-    private fun detectStepFromAccelerometer(values: FloatArray) {
-        val magnitude = sqrt(values[0] * values[0] + values[1] * values[1] + values[2] * values[2])
-        val now = SystemClock.uptimeMillis()
-
-        // Detect acceleration peak above 11.2 m/s^2 after falling below 9.2 m/s^2
-        if (magnitude > 11.2f && !accelStepPeakDetected && (now - lastStepTimeMs) > 320) {
-            accelStepPeakDetected = true
-            lastStepTimeMs = now
-            registerStep()
-        } else if (magnitude < 9.4f) {
-            accelStepPeakDetected = false
-        }
-        lastAccelMagnitude = magnitude
+    /** Continuous yaw (no jump at ±180). A single big jump (top/back axis switch) is ignored. */
+    private fun unwrap(raw: Float): Float {
+        val prev = yaw
+        var d = raw - lastRawYaw
+        lastRawYaw = raw
+        if (prev == null) return raw
+        if (d > 180f) d -= 360f
+        if (d < -180f) d += 360f
+        return if (abs(d) > 90f) prev else prev + d
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}

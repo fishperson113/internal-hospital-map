@@ -24,6 +24,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,6 +85,8 @@ fun NavigationSheet(
     stepIndex: Int,
     language: AppLanguage,
     telemetryText: String = "",
+    diagnostics: String = "",           // shown when the telemetry badge is tapped (on-site tuning)
+    floorChangeSuggested: Boolean = false,
     hasArrived: Boolean = false,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -97,6 +103,7 @@ fun NavigationSheet(
 ) {
     val l = HospitalLocalization
     val isLast = stepIndex >= steps.lastIndex
+    var showDiag by remember { mutableStateOf(false) }
     MapBottomSheetContainer(modifier = modifier.testTag("navigation_sheet")) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -129,6 +136,7 @@ fun NavigationSheet(
         ) {
             if (telemetryText.isNotBlank()) {
                 Surface(
+                    onClick = { showDiag = !showDiag },
                     shape = RoundedCornerShape(12.dp),
                     color = Color(0xFFF1F5F9),
                     border = BorderStroke(0.8.dp, Color(0xFFE2E8F0))
@@ -169,6 +177,17 @@ fun NavigationSheet(
                     )
                 }
             }
+        }
+
+        if (showDiag && diagnostics.isNotBlank()) {
+            Text(diagnostics, fontSize = 11.sp, color = Color(0xFF475569), lineHeight = 15.sp, modifier = Modifier.testTag("sensor_diagnostics"))
+        }
+
+        if (floorChangeSuggested && !isLast) {
+            Text(
+                l.t(language, "Có vẻ bạn đã đổi tầng. Bấm “Bước tiếp theo” khi đã tới nơi.", "Looks like you changed floor. Tap “Next step” when you are there."),
+                fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MapBluePrimary
+            )
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {

@@ -253,6 +253,8 @@ fun HospitalMapScreen(
                     stepIndex = ui.navStepIndex,
                     language = lang,
                     telemetryText = ui.sensorTelemetryText,
+                    diagnostics = ui.sensorDiagnostics,
+                    floorChangeSuggested = ui.floorChangeSuggested,
                     hasArrived = ui.hasArrivedAtDestination,
                     onPrevious = viewModel::onPreviousStep,
                     onNext = viewModel::onNextStep,

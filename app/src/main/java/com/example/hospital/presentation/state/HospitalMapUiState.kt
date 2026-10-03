@@ -67,6 +67,8 @@ data class HospitalMapUiState(
     val isAutoRotateEnabled: Boolean = false,
     val isSensorTrackingActive: Boolean = false,
     val sensorTelemetryText: String = "",
+    val sensorDiagnostics: String = "",       // raw sensor counters, shown when the telemetry badge is tapped
+    val floorChangeSuggested: Boolean = false, // barometer says the user changed floor: point at "Bước tiếp theo"
     val hasArrivedAtDestination: Boolean = false,
 
     // CRM WebSocket live assistance ("Tôi bị lạc")
