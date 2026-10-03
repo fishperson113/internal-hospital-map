@@ -19,22 +19,21 @@ data class IndoorPdrState(
 
 /**
  * Moves the user's dot while directions are on (the dot starts on the route start; floors change
- * only by the step buttons).
+ * only by the step buttons). Input: meters walked + facing direction on the plan ([HeadingFusion]).
  *
- * On the route: distance from the step detector slides the dot along the line, and gyro turns
- * correct it (map matching), so step-length errors do not pile up:
+ * On the route: distance from the step detector slides the dot along the line, and turns correct
+ * it (map matching), so step-length errors do not pile up:
  * - Every real corner of the line (turn >= [MIN_TURN_DEG]) is a checkpoint.
- * - The dot never passes a corner until the phone has turned that way: it waits there.
- * - If the phone turns that way while the dot is up to [SNAP_M] before the corner, the dot jumps to it.
+ * - The dot never passes a corner until the user has turned that way: it waits there.
+ * - If the user turns that way while the dot is up to [SNAP_M] before the corner, the dot jumps to it.
+ * Turns are measured against the leg's reference direction: the leg's own direction on the plan,
+ * then following the measured heading while walking straight (absorbs a small heading bias).
  *
  * Leaving the route (to meet someone, a wrong turn): walking [OFF_ROUTE_M] facing more than
- * [OFF_ROUTE_DEG] away from the line where it has no matching corner, or [OVERSHOOT_M] straight past
- * a corner, switches to free walking: steps move the dot along the gyro heading, in corridors only
+ * [OFF_ROUTE_DEG] away from the leg where it has no matching corner, or [OVERSHOOT_M] straight past
+ * a corner, switches to free walking: steps move the dot along the heading, in corridors only
  * ([walkable]: never through rooms; it slides along walls). [IndoorPdrState.offRoute] tells the
  * caller to re-route from there.
- *
- * The gyro yaw is relative (no compass, no north needed): each leg's reference direction is learned
- * from the first steps on it and follows slow gyro drift; plan heading = line direction + gyro turn.
  */
 class IndoorPdrTracker(
     /** Can a person stand at this plan point on this floor (corridor, inside the floor plan)? */
@@ -57,12 +56,10 @@ class IndoorPdrTracker(
     private var walking = false // false while in the elevator / on the stairs (step "change floor")
     private var corners: List<Corner> = emptyList()
     private var nextCorner = 0
-    private var legYaw: Float? = null
+    private var legRef = 0f // reference direction of the current leg on the plan
     private var offMeters = 0f
     private var overshootPx = 0f
     private var free: Point2D? = null // off route: where the dot is
-    private var freeLine = 0f        // plan heading of the line that was left ...
-    private var freeYaw = 0f         // ... and the gyro yaw that meant "along it"
 
     fun initialize(route: HospitalRoute): IndoorPdrState? {
         this.route = route
@@ -71,26 +68,25 @@ class IndoorPdrTracker(
     }
 
     /**
-     * The user walked [meters]. [yawDeg] = gyro heading (relative, clockwise); null = no gyro:
-     * the dot only slides along the line.
+     * The user walked [meters] facing [headingDeg] on the plan (0 = up, clockwise; null = unknown:
+     * the dot only slides along the line).
      */
-    fun onWalked(meters: Float, yawDeg: Float?): IndoorPdrState? {
+    fun onWalked(meters: Float, headingDeg: Float?): IndoorPdrState? {
         val r = route ?: return null
         if (!walking || meters <= 0f) return null
         free?.let { p ->
-            if (yawDeg != null) free = move(p, freeHeading(yawDeg), meters, r.segments[segment].floorLevel)
+            if (headingDeg != null) free = move(p, headingDeg, meters, r.segments[segment].floorLevel)
             return state()
         }
         var target = walkedPx + meters / mpp
-        if (yawDeg != null) {
-            val ref = legYaw ?: yawDeg
-            val turned = wrap(yawDeg - ref)
+        if (headingDeg != null) {
+            val turned = wrap(headingDeg - legRef)
             val c = corners.getOrNull(nextCorner)
             if (c != null && abs(wrap(turned - c.turnDeg)) <= TURN_TOLERANCE_DEG && c.distPx - walkedPx <= SNAP_M / mpp) {
                 // Turned onto the next leg: continue from the corner with this step.
                 target = c.distPx + meters / mpp
                 nextCorner++
-                legYaw = yawDeg
+                legRef = lineAt(target) ?: headingDeg
                 offMeters = 0f
                 overshootPx = 0f
             } else {
@@ -98,12 +94,12 @@ class IndoorPdrTracker(
                     overshootPx += target - c.distPx
                     target = c.distPx
                 }
-                // Learn / follow the leg direction while walking straight (not while turning).
-                legYaw = if (abs(turned) < 20f) ref + turned * 0.2f else ref
+                // Follow the measured heading while walking straight (not while turning).
+                if (abs(turned) < 20f) legRef += turned * 0.2f
                 offMeters = if (abs(turned) > OFF_ROUTE_DEG) offMeters + meters else 0f
                 if (offMeters >= OFF_ROUTE_M || overshootPx * mpp >= OVERSHOOT_M) {
                     walkedPx = target
-                    return leaveRoute(yawDeg)
+                    return leaveRoute(headingDeg)
                 }
             }
         }
@@ -112,18 +108,14 @@ class IndoorPdrTracker(
     }
 
     /** Switch to free walking, replaying the meters walked since the user left the line. */
-    private fun leaveRoute(yawDeg: Float): IndoorPdrState? {
+    private fun leaveRoute(headingDeg: Float): IndoorPdrState? {
         val seg = route?.segments?.getOrNull(segment) ?: return null
         val turnedAway = offMeters >= OFF_ROUTE_M // else: went on straight past a corner
         val replay = if (turnedAway) offMeters else overshootPx * mpp
         val departPx = if (turnedAway) max(0f, walkedPx - offMeters / mpp) else walkedPx
-        freeLine = directionAt(seg.points, departPx) ?: 0f
-        freeYaw = legYaw ?: yawDeg
-        free = move(pointAlong(seg.points, departPx).first, freeHeading(yawDeg), replay, seg.floorLevel)
+        free = move(pointAlong(seg.points, departPx).first, headingDeg, replay, seg.floorLevel)
         return state()
     }
-
-    private fun freeHeading(yawDeg: Float) = (freeLine + wrap(yawDeg - freeYaw) + 360f) % 360f
 
     /** Walk [meters] along plan heading [deg] in small steps, sliding along walls, never into a room. */
     private fun move(from: Point2D, deg: Float, meters: Float, floor: Int): Point2D {
@@ -140,19 +132,10 @@ class IndoorPdrTracker(
         return p
     }
 
-    /**
-     * Direction the user faces on the plan (0 = up, clockwise), with no compass and no north:
-     * the direction of the line under the dot (or of the line left behind), turned by how far the
-     * gyro has turned from its reference. Null while in the shaft / not navigating.
-     */
-    fun planHeading(yawDeg: Float?): Float? {
-        val r = route ?: return null
-        if (!walking) return null
-        if (free != null) return freeHeading(yawDeg ?: freeYaw)
-        val line = r.segments.getOrNull(segment)?.points?.let { directionAt(it, walkedPx) } ?: return null
-        val ref = legYaw
-        return if (yawDeg == null || ref == null) line else (line + wrap(yawDeg - ref) + 360f) % 360f
-    }
+    private fun lineAt(px: Float): Float? = route?.segments?.getOrNull(segment)?.points?.let { directionAt(it, px) }
+
+    /** Direction of the route line under the dot while walking on it (for [HeadingFusion.alignTo]); else null. */
+    fun lineHeading(): Float? = if (walking && free == null) lineAt(walkedPx) else null
 
     /**
      * Steps come from RouteStepFormatter: same floor = [walk to dest];
@@ -166,7 +149,7 @@ class IndoorPdrTracker(
         walkedPx = if (atShaft) Float.MAX_VALUE else 0f // shaft = end of the first segment
         corners = r.segments.getOrNull(segment)?.let { corners(it.points, MERGE_M / mpp) }.orEmpty()
         nextCorner = 0
-        legYaw = null
+        legRef = lineAt(walkedPx) ?: 0f
         offMeters = 0f
         overshootPx = 0f
         free = null

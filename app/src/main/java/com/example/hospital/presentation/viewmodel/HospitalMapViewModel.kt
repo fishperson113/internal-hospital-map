@@ -50,6 +50,7 @@ class HospitalMapViewModel(
     private var searchJob: Job? = null
     private var sensorJob: Job? = null
     private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker(::walkable)
+    private val headingFusion = com.example.hospital.sensor.HeadingFusion()
     private var lastWalkedMeters = 0f
     private var lastStepMs = 0L
     private var offRouteMeters = 0f // walked off route since the last re-route
@@ -78,22 +79,29 @@ class HospitalMapViewModel(
             sensorManager?.sensorData?.collect { data ->
                 // While directions are on, meters walked slide the dot along the route;
                 // gyro turns snap it to / hold it at corners (IndoorPdrTracker).
+                // Facing direction on the plan: compass - PLAN_NORTH_DEG as reference, gyro for smoothness.
+                val planHeading = headingFusion.update(data.headingDegrees, data.yawDegrees)
                 val dm = data.walkedMeters - lastWalkedMeters
                 lastWalkedMeters = data.walkedMeters
                 if (dm > 0f && _uiState.value.isNavigating) {
                     lastStepMs = SystemClock.elapsedRealtime()
-                    pdrTracker.onWalked(dm, data.yawDegrees)?.let { st ->
+                    pdrTracker.onWalked(dm, planHeading)?.let { st ->
                         applyPdrUpdate(st)
                         if (st.offRoute) offRouteMeters += dm
                     }
+                    // Walking straight along the line: let the route fine-tune the heading reference.
+                    val line = pdrTracker.lineHeading()
+                    if (line != null && planHeading != null &&
+                        kotlin.math.abs(com.example.hospital.sensor.wrap(planHeading - line)) < 20f
+                    ) headingFusion.alignTo(line, data.yawDegrees)
                 }
                 maybeReroute()
-                val heading = data.headingDegrees
+                val heading = data.headingDegrees ?: 0f
                 val d = data.diag
                 _uiState.update {
                     it.copy(
                         userHeadingDegrees = heading,
-                        userPlanHeading = if (it.isNavigating) pdrTracker.planHeading(data.yawDegrees) else null,
+                        userPlanHeading = planHeading,
                         stepCount = data.totalSteps,
                         isSensorTrackingActive = data.isTracking,
                         sensorTelemetryText = "${heading.toInt()}° ${getCompassDirection(heading)} · ${data.totalSteps} bước · ${"%.1f".format(data.walkedMeters)} m",

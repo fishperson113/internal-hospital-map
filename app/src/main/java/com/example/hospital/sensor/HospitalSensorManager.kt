@@ -18,7 +18,7 @@ import kotlin.math.abs
 import kotlin.math.atan2
 
 data class HospitalSensorData(
-    val headingDegrees: Float = 0f,  // compass (absolute), only for the arrow / map rotation
+    val headingDegrees: Float? = null, // compass (absolute, magnetic); null = no magnetometer
     val yawDegrees: Float? = null,   // gyro heading (relative, continuous, clockwise) for turn matching
     val totalSteps: Int = 0,         // steps that moved the dot
     val walkedMeters: Float = 0f,    // sum of their lengths
@@ -48,7 +48,7 @@ data class SensorDiagnostics(
  *   skipped from the next ones.
  * - Turns: GAME_ROTATION_VECTOR (gyro + accelerometer, no magnetometer, so steel and elevators do
  *   not bend it). Falls back to ROTATION_VECTOR.
- * - Compass: ROTATION_VECTOR, only for the heading arrow.
+ * - Compass: ROTATION_VECTOR, the absolute reference for [HeadingFusion].
  * - Barometer: smoothed pressure, used to suggest a floor change.
  */
 class HospitalSensorManager(val context: Context) : SensorEventListener {
@@ -88,7 +88,7 @@ class HospitalSensorManager(val context: Context) : SensorEventListener {
 
     private var yaw: Float? = null
     private var lastRawYaw = 0f
-    private var compass = 0f
+    private var compass: Float? = null
     private var accelCount = 0
     private var accelHz = 0
     private var rateWindowMs = 0L
@@ -140,7 +140,6 @@ class HospitalSensorManager(val context: Context) : SensorEventListener {
             }
             Sensor.TYPE_GAME_ROTATION_VECTOR -> {
                 yaw = unwrap(azimuth(e.values))
-                if (rotation == null) compass = (lastRawYaw + 360f) % 360f
             }
             Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR -> {
                 val a = azimuth(e.values)
