@@ -260,7 +260,9 @@ fun HospitalMapScreen(
                     onPrevious = viewModel::onPreviousStep,
                     onNext = viewModel::onNextStep,
                     onSimulateStep = viewModel::onSimulateStep,
-                    onExit = viewModel::onStopNavigation
+                    onExit = viewModel::onStopNavigation,
+                    helpStatus = ui.helpStatus,
+                    onAskHelp = viewModel::onAskHelp
                 )
                 selected != null -> RoomDetailSheet(
                     room = selected,
@@ -279,7 +281,9 @@ fun HospitalMapScreen(
                     isExpanded = ui.isRouteDetailsExpanded,
                     onToggleExpand = viewModel::onToggleRouteDetails,
                     onStepClick = viewModel::onFocusStep,
-                    onStartNavigation = viewModel::onStartNavigation
+                    onStartNavigation = viewModel::onStartNavigation,
+                    helpStatus = ui.helpStatus,
+                    onAskHelp = viewModel::onAskHelp
                 )
             }
         }

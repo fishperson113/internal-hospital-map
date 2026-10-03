@@ -1,56 +1,119 @@
 package com.example.hospital.sensor
 
+import android.content.Context
+import android.os.SystemClock
 import com.example.hospital.domain.model.HospitalRoute
 import com.example.hospital.domain.model.Point2D
-import com.example.hospital.domain.model.RouteSegment
-import kotlin.math.atan2
+import com.example.hospital.domain.util.HospitalGeometry
+import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.min
+import kotlin.math.sin
 
 data class IndoorPdrState(
     val position: Point2D,
     val floorLevel: Int,
+    val floorId: String = "tang-$floorLevel",
     val segmentIndex: Int = 0,
-    val pointIndex: Int = 0,
     val distanceRemainingMeters: Float = 0f,
     val hasArrived: Boolean = false,
     val isNearTransfer: Boolean = false,
-    val transferProgressFraction: Float = 0f
+    val isOffRoute: Boolean = false,
+    val planHeadingDeg: Float = 0f
 )
 
 /**
  * Pedestrian Dead Reckoning (PDR) & Map Matching Engine for indoor hospital navigation.
- * Advances the user's location along the active walking route with each step registered
- * by the device's sensors (Hardware Step Detector or Accelerometer PDR).
+ * Implements the 7-step PDR specifications (Section 7).
  */
-class IndoorPdrTracker {
+class IndoorPdrTracker(
+    private val context: Context? = null,
+    private val onOffRoute: ((floorId: String, floorLevel: Int, x: Float, y: Float) -> Unit)? = null
+) {
+    companion object {
+        private const val PREFS_NAME = "hospital_pdr_prefs"
+        private const val KEY_STEP_LENGTH = "step_length_m"
+        private const val KEY_NORTH_DEG_PREFIX = "north_deg_floor_"
+        private const val DEFAULT_STEP_LENGTH_M = 0.65f
+        private const val DEFAULT_METERS_PER_PX = 0.08f
+        private const val SNAP_THRESHOLD_PX = 40f // ~3m
+        private const val OFF_ROUTE_THRESHOLD_PX = 60f // ~5m
+        private const val REROUTE_THROTTLE_MS = 5000L
+    }
+
+    private val prefs = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val memoryPrefs = mutableMapOf<String, Float>()
 
     private var currentRoute: HospitalRoute? = null
     private var state: IndoorPdrState? = null
 
-    // 1 plan unit = 0.1m, average stride = 0.7m = 7.0f plan units
-    private val stepDistanceUnits = 7.0f
+    var stepLengthM: Float = prefs?.getFloat(KEY_STEP_LENGTH, DEFAULT_STEP_LENGTH_M) ?: DEFAULT_STEP_LENGTH_M
+        private set
+
+    private fun getSavedNorth(floorId: String): Float {
+        return prefs?.getFloat(KEY_NORTH_DEG_PREFIX + floorId, 0f)
+            ?: memoryPrefs[KEY_NORTH_DEG_PREFIX + floorId]
+            ?: 0f
+    }
+
+    private fun saveNorth(floorId: String, value: Float) {
+        prefs?.edit()?.putFloat(KEY_NORTH_DEG_PREFIX + floorId, value)?.apply()
+        memoryPrefs[KEY_NORTH_DEG_PREFIX + floorId] = value
+    }
+
+    private fun hasSavedNorth(floorId: String): Boolean {
+        return prefs?.contains(KEY_NORTH_DEG_PREFIX + floorId) == true || memoryPrefs.containsKey(KEY_NORTH_DEG_PREFIX + floorId)
+    }
+
+    private fun saveStepLength(length: Float) {
+        prefs?.edit()?.putFloat(KEY_STEP_LENGTH, length)?.apply()
+        memoryPrefs[KEY_STEP_LENGTH] = length
+    }
+
+    private var metersPerPx: Float = DEFAULT_METERS_PER_PX
+
+    // Initial heading calibration per floor
+    private val initialCompassSamples = mutableListOf<Float>()
+    private var isNorthCalibrated = false
+    private var lastRerouteTimeMs = 0L
+
+    // Milestone calibration tracking
+    private var stepsCountedInSegment = 0
+    private var segmentStartDistanceM = 0f
 
     fun initialize(route: HospitalRoute): IndoorPdrState {
         currentRoute = route
+        metersPerPx = route.assumptions.metersPerPx.toFloat().coerceAtLeast(0.01f)
+
         val firstSeg = route.segments.firstOrNull()
         val startPt = firstSeg?.points?.firstOrNull() ?: Point2D(0f, 0f)
         val startFloor = firstSeg?.floorLevel ?: route.startNode.floorLevel
+        val startFloorId = firstSeg?.floorId ?: "tang-$startFloor"
+
+        initialCompassSamples.clear()
+        isNorthCalibrated = hasSavedNorth(startFloorId)
+        stepsCountedInSegment = 0
+        segmentStartDistanceM = firstSeg?.length ?: 0f
 
         val newState = IndoorPdrState(
             position = startPt,
             floorLevel = startFloor,
+            floorId = startFloorId,
             segmentIndex = 0,
-            pointIndex = 0,
             distanceRemainingMeters = route.totalDistanceMeters,
             hasArrived = false,
-            isNearTransfer = false
+            isNearTransfer = false,
+            isOffRoute = false,
+            planHeadingDeg = 0f
         )
         state = newState
         return newState
     }
 
-    fun onStep(): IndoorPdrState? {
+    /**
+     * Advances user position by 1 step given the compass heading.
+     */
+    fun onStep(compassDeg: Float? = null): IndoorPdrState? {
         val s = state ?: return null
         val route = currentRoute ?: return s
         if (s.hasArrived) return s
@@ -58,119 +121,142 @@ class IndoorPdrTracker {
         val segments = route.segments
         if (segments.isEmpty()) return s
 
-        var segIdx = s.segmentIndex
-        var ptIdx = s.pointIndex
-        var pos = s.position
-        var currentFloor = s.floorLevel
-        var remainingAdvance = stepDistanceUnits
+        val segIdx = s.segmentIndex.coerceIn(0, segments.lastIndex)
+        val currentSeg = segments[segIdx]
+        val points = currentSeg.points
+        if (points.isEmpty()) return s
 
-        while (remainingAdvance > 0f && segIdx < segments.size) {
-            val currentSeg = segments[segIdx]
-            currentFloor = currentSeg.floorLevel
-            val points = currentSeg.points
+        stepsCountedInSegment++
 
-            if (ptIdx >= points.lastIndex) {
-                // Reached end of current segment!
-                if (segIdx < segments.lastIndex) {
-                    // Transfer to next floor (Elevator / Stairs)
-                    segIdx++
-                    ptIdx = 0
-                    val nextSeg = segments[segIdx]
-                    pos = nextSeg.points.firstOrNull() ?: pos
-                    currentFloor = nextSeg.floorLevel
-                    remainingAdvance -= stepDistanceUnits * 0.5f // cost of transferring
-                } else {
-                    // Reached end of final segment = ARRIVED!
-                    pos = points.last()
-                    val arrivedState = s.copy(
-                        position = pos,
-                        floorLevel = currentFloor,
-                        segmentIndex = segIdx,
-                        pointIndex = ptIdx,
-                        distanceRemainingMeters = 0f,
-                        hasArrived = true,
-                        isNearTransfer = false
-                    )
-                    state = arrivedState
-                    return arrivedState
-                }
-            } else {
-                val p1 = pos
-                val p2 = points[ptIdx + 1]
-                val dx = p2.x - p1.x
-                val dy = p2.y - p1.y
-                val distToNext = hypot(dx, dy)
-
-                if (distToNext <= remainingAdvance) {
-                    pos = p2
-                    ptIdx++
-                    remainingAdvance -= distToNext
-                } else {
-                    val ratio = remainingAdvance / distToNext
-                    pos = Point2D(p1.x + dx * ratio, p1.y + dy * ratio)
-                    remainingAdvance = 0f
-                }
+        // 1. Calibrate northDeg if needed on initial steps
+        val effectiveCompassDeg = compassDeg ?: 0f
+        if (!isNorthCalibrated && points.size >= 2) {
+            initialCompassSamples.add(effectiveCompassDeg)
+            if (initialCompassSamples.size >= 3) {
+                val avgCompass = initialCompassSamples.average().toFloat()
+                val segmentHeading = HospitalGeometry.segmentAngleDeg(points[0], points[1])
+                val northDeg = (avgCompass - segmentHeading + 360f) % 360f
+                saveNorth(currentSeg.floorId, northDeg)
+                isNorthCalibrated = true
             }
         }
 
-        // Calculate remaining meters
-        var remainingMeters = 0f
-        for (i in segIdx until segments.size) {
-            val seg = segments[i]
-            val pts = seg.points
-            if (i == segIdx) {
-                if (pts.isNotEmpty()) {
-                    val currentNext = pts.getOrNull(ptIdx + 1)
-                    if (currentNext != null) {
-                        remainingMeters += hypot(currentNext.x - pos.x, currentNext.y - pos.y) * 0.1f
-                    }
-                    for (j in (ptIdx + 1) until pts.lastIndex) {
-                        remainingMeters += hypot(pts[j + 1].x - pts[j].x, pts[j + 1].y - pts[j].y) * 0.1f
-                    }
-                }
-            } else {
-                for (j in 0 until pts.lastIndex) {
-                    remainingMeters += hypot(pts[j + 1].x - pts[j].x, pts[j + 1].y - pts[j].y) * 0.1f
-                }
+        // 2. Convert compass heading to plan heading
+        val savedNorthDeg = getSavedNorth(currentSeg.floorId)
+        var planHeading = (effectiveCompassDeg - savedNorthDeg + 360f) % 360f
+
+        // 3. Corridor snapping: snap to 0, 90, 180, 270 if within 20 degrees
+        planHeading = snapToCorridor(planHeading)
+
+        // 4. Advance position according to heading
+        // val px = stepLengthM / metersPerPx
+        // x += px * sin(rad), y -= px * cos(rad)
+        val px = (stepLengthM / metersPerPx).coerceAtLeast(1f)
+        val rad = Math.toRadians(planHeading.toDouble())
+        var newX = (s.position.x + px * sin(rad)).toFloat()
+        var newY = (s.position.y - px * cos(rad)).toFloat()
+
+        // 5. Route snapping: pull to nearest point on polyline if within 40 px (~3m)
+        val (closestPt, distToRoute) = HospitalGeometry.closestPointOnPolyline(points, newX, newY)
+        var isOffRoute = false
+
+        if (distToRoute <= SNAP_THRESHOLD_PX) {
+            newX = closestPt.x
+            newY = closestPt.y
+        } else if (distToRoute > OFF_ROUTE_THRESHOLD_PX) {
+            isOffRoute = true
+            val now = SystemClock.uptimeMillis()
+            if (now - lastRerouteTimeMs >= REROUTE_THROTTLE_MS) {
+                lastRerouteTimeMs = now
+                onOffRoute?.invoke(currentSeg.floorId, currentSeg.floorLevel, newX, newY)
             }
         }
 
-        val hasArrived = (segIdx >= segments.lastIndex && ptIdx >= (segments.lastOrNull()?.points?.lastIndex ?: 0))
-            || remainingMeters <= 1.5f
+        val updatedPos = Point2D(newX, newY)
 
-        val nearTransfer = route.transfer != null && segIdx == 0 && ptIdx >= (segments.firstOrNull()?.points?.size ?: 1) - 3
+        // 6. Check arrival / near milestone
+        val lastPt = points.last()
+        val distToSegEnd = hypot(newX - lastPt.x, newY - lastPt.y) * metersPerPx
+
+        val isLastSeg = segIdx == segments.lastIndex
+        val hasArrived = isLastSeg && (distToSegEnd <= 1.5f)
+        val isNearTransfer = !isLastSeg && (distToSegEnd <= 3.0f)
+
+        // Calculate remaining meters along route
+        var remainingMeters = distToSegEnd
+        for (i in (segIdx + 1) until segments.size) {
+            remainingMeters += segments[i].length
+        }
 
         val updated = s.copy(
-            position = pos,
-            floorLevel = currentFloor,
+            position = updatedPos,
+            floorLevel = currentSeg.floorLevel,
+            floorId = currentSeg.floorId,
             segmentIndex = segIdx,
-            pointIndex = ptIdx,
             distanceRemainingMeters = if (hasArrived) 0f else remainingMeters,
             hasArrived = hasArrived,
-            isNearTransfer = nearTransfer
+            isNearTransfer = isNearTransfer,
+            isOffRoute = isOffRoute,
+            planHeadingDeg = planHeading
         )
         state = updated
         return updated
     }
 
+    /**
+     * Snap to milestone when moving to next step or changing floors.
+     * Updates and saves learned step length according to Section 7.
+     */
+    fun snapToMilestone(nextSegmentIndex: Int): IndoorPdrState? {
+        val s = state ?: return null
+        val route = currentRoute ?: return s
+        val segments = route.segments
+        if (nextSegmentIndex !in segments.indices) return s
+
+        // Adapt step length based on actual distance walked
+        if (stepsCountedInSegment > 2 && segmentStartDistanceM > 0f) {
+            val observedStepLength = (segmentStartDistanceM / stepsCountedInSegment).coerceIn(0.45f, 0.95f)
+            stepLengthM = (stepLengthM + observedStepLength) / 2f
+            saveStepLength(stepLengthM)
+        }
+
+        val nextSeg = segments[nextSegmentIndex]
+        val milestonePt = nextSeg.points.firstOrNull() ?: s.position
+
+        stepsCountedInSegment = 0
+        segmentStartDistanceM = nextSeg.length
+
+        val updated = s.copy(
+            position = milestonePt,
+            floorLevel = nextSeg.floorLevel,
+            floorId = nextSeg.floorId,
+            segmentIndex = nextSegmentIndex,
+            isNearTransfer = false,
+            isOffRoute = false
+        )
+        state = updated
+        return updated
+    }
+
+    /**
+     * Corridor snapping: if within 20 degrees of 0, 90, 180, 270, snap to it.
+     */
+    private fun snapToCorridor(heading: Float): Float {
+        val h = (heading + 360f) % 360f
+        return when {
+            h <= 20f || h >= 340f -> 0f
+            abs(h - 90f) <= 20f -> 90f
+            abs(h - 180f) <= 20f -> 180f
+            abs(h - 270f) <= 20f -> 270f
+            else -> h
+        }
+    }
+
     fun onFloorPressureChange(floorOffset: Int): IndoorPdrState? {
         val s = state ?: return null
         val route = currentRoute ?: return s
-        // If we are at or near a transfer and barometer detected a floor change upwards (+1) or downwards (-1)
         if (route.transfer != null && s.segmentIndex == 0 && floorOffset != 0) {
-            val segments = route.segments
-            if (segments.size > 1) {
-                val nextSeg = segments[1]
-                val newState = s.copy(
-                    position = nextSeg.points.firstOrNull() ?: s.position,
-                    floorLevel = nextSeg.floorLevel,
-                    segmentIndex = 1,
-                    pointIndex = 0,
-                    isNearTransfer = false
-                )
-                state = newState
-                return newState
-            }
+            return snapToMilestone(1)
         }
         return null
     }

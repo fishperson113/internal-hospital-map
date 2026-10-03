@@ -39,7 +39,7 @@ data class HospitalSensorData(
  * - Floor / Altitude: Barometer (Pressure Sensor) tracking elevation changes.
  * - Geolocation: GPS and Network location providers.
  */
-class HospitalSensorManager(private val context: Context) : SensorEventListener, LocationListener {
+class HospitalSensorManager(val context: Context) : SensorEventListener, LocationListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager

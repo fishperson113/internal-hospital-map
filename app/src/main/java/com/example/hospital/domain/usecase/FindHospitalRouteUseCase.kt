@@ -19,12 +19,36 @@ class FindHospitalRouteUseCase(
         destRoomOrNodeId: String,
         language: AppLanguage = AppLanguage.VIETNAMESE,
         // null = any shaft (fastest); "elevator" or "stair" = only use that kind to change floors
-        preferredTransferKind: String? = null
+        preferredTransferKind: String? = null,
+        preferRemote: Boolean = false
     ): HospitalRoute? {
         val mapData = repository.getHospitalMap().first()
         val graph = mapData.graph
         val startRoom = repository.getRoomById(startRoomOrNodeId)
         val destRoom = repository.getRoomById(destRoomOrNodeId)
+
+        // 0. Call remote backend route API if requested (GET /api/route)
+        if (preferRemote) {
+            val startFloorId = startRoom?.floorId ?: "tang-${startRoom?.floorLevel ?: 2}"
+            val destFloorId = destRoom?.floorId ?: "tang-${destRoom?.floorLevel ?: 2}"
+            val startId = startRoom?.rawId?.toString() ?: startRoomOrNodeId.substringAfterLast('_').substringAfterLast(':')
+            val destId = destRoom?.rawId?.toString() ?: destRoomOrNodeId.substringAfterLast('_').substringAfterLast(':')
+            val fromParam = "$startFloorId:$startId"
+            val toParam = "$destFloorId:$destId"
+            val prefParam = preferredTransferKind ?: "any"
+
+            val remoteResult = try {
+                repository.fetchRoute(fromParam, toParam, prefParam, destRoom?.name, language)
+            } catch (_: Exception) {
+                null
+            }
+
+            if (remoteResult is RouteFetchResult.Success) {
+                return remoteResult.route
+            } else if (remoteResult is RouteFetchResult.Error && remoteResult.errorType == "no-shaft") {
+                return null
+            }
+        }
 
         val floorsByLevel = mapData.floors.associateBy { it.level }
 

@@ -86,6 +86,8 @@ fun NavigationSheet(
     onNext: () -> Unit,
     onSimulateStep: () -> Unit = {},
     onExit: () -> Unit,
+    helpStatus: String? = null,
+    onAskHelp: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -203,6 +205,15 @@ fun NavigationSheet(
                     contentDescription = null, modifier = Modifier.padding(start = 6.dp).size(20.dp)
                 )
             }
+        }
+
+        if (onAskHelp != null) {
+            HelpAssistanceCard(
+                helpStatus = helpStatus,
+                language = language,
+                onAskHelp = onAskHelp,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
     }
 }

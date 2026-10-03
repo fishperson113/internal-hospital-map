@@ -92,6 +92,8 @@ fun RouteBottomSheet(
     onToggleExpand: () -> Unit,
     onStepClick: (Int) -> Unit,
     onStartNavigation: () -> Unit,
+    helpStatus: String? = null,
+    onAskHelp: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -191,6 +193,15 @@ fun RouteBottomSheet(
                             contentDescription = l.getDetailedRouteLabel(language), tint = MapBluePrimary
                         )
                     }
+                }
+
+                if (onAskHelp != null) {
+                    HelpAssistanceCard(
+                        helpStatus = helpStatus,
+                        language = language,
+                        onAskHelp = onAskHelp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 }
             }
         }

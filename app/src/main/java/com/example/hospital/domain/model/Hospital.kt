@@ -47,7 +47,17 @@ data class Room(
     val kind: String? = null,
     val link: String? = null,
     val polygon: List<Point2D> = emptyList(),
-    val labelAt: Point2D? = null
+    val labelAt: Point2D? = null,
+    val rawId: Int = 0,
+    val floorId: String = "tang-$floorLevel"
+)
+
+data class PinnedPoint(
+    val floorId: String,
+    val floorLevel: Int,
+    val x: Float,
+    val y: Float,
+    val nearestRoom: Room? = null
 )
 
 data class Floor(
@@ -60,7 +70,8 @@ data class Floor(
     val height: Float = 734f,
     val isTodo: Boolean = false,
     val labels: List<FloorLabel> = emptyList(),
-    val links: List<String> = emptyList()
+    val links: List<String> = emptyList(),
+    val frame: List<Float> = emptyList()
 )
 
 data class MapNode(

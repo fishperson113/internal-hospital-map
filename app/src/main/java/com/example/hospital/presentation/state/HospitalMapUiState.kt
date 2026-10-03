@@ -69,5 +69,8 @@ data class HospitalMapUiState(
     val sensorTelemetryText: String = "",
     val hasArrivedAtDestination: Boolean = false,
 
+    // CRM WebSocket live assistance ("Tôi bị lạc")
+    val helpStatus: String? = null,
+
     val language: AppLanguage = AppLanguage.VIETNAMESE
 )

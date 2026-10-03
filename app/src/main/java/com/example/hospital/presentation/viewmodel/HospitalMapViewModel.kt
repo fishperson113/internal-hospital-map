@@ -40,8 +40,11 @@ class HospitalMapViewModel(
     private var routeJob: Job? = null
     private var searchJob: Job? = null
     private var sensorJob: Job? = null
-    private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker()
+    private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker(context = sensorManager?.context)
     private var lastObservedStepTrigger: Long = 0L
+    private val liveClient = com.example.hospital.data.api.LiveClient(context = sensorManager?.context) { status ->
+        _uiState.update { it.copy(helpStatus = status) }
+    }
 
     init {
         loadMapData()
@@ -124,6 +127,29 @@ class HospitalMapViewModel(
                 navStepIndex = maxOf(current.navStepIndex, targetStep)
             )
         }
+        syncLiveState(isMajor = false)
+    }
+
+    private fun syncLiveState(isMajor: Boolean = false) {
+        val s = _uiState.value
+        val start = s.startRoom ?: return
+        val fromStr = "${start.floorId}:${start.rawId}"
+        val toStr = s.destRoom?.let { "${it.floorId}:${it.rawId}" }
+        val currentStep = s.routeSteps.getOrNull(s.navStepIndex)
+        val title = currentStep?.title ?: ""
+
+        val posObj = s.userPosition?.let { pos ->
+            val floorStr = "tang-${s.userFloorLevel ?: start.floorLevel}"
+            """{"floor":"$floorStr","x":${pos.x},"y":${pos.y}}"""
+        } ?: "null"
+
+        val json = """{"type":"state","from":"$fromStr","to":${toStr?.let { "\"$it\"" } ?: "null"},"at":"$fromStr","pos":$posObj,"nav":${s.isNavigating},"step":${s.navStepIndex},"steps":${s.routeSteps.size},"title":"$title"}"""
+        liveClient.sendState(json, isMajor)
+    }
+
+    fun onAskHelp() {
+        _uiState.update { it.copy(helpStatus = "sending") }
+        liveClient.askHelp()
     }
 
     private fun getCompassDirection(deg: Float): String {
@@ -357,6 +383,7 @@ class HospitalMapViewModel(
         super.onCleared()
         sensorJob?.cancel()
         sensorManager?.stopTracking()
+        liveClient.disconnect()
     }
 
     /** System back: close the top-most layer first. Returns true if something was closed. */
@@ -448,7 +475,7 @@ class HospitalMapViewModel(
             val lang = _uiState.value.language
             val kind = _uiState.value.transferPreference.roomKind
             val route = withContext(Dispatchers.Default) {
-                findHospitalRouteUseCase(start.id, dest.id, lang, kind)
+                findHospitalRouteUseCase(start.id, dest.id, lang, kind, preferRemote = true)
             }
             val steps = route?.let { RouteStepFormatter.build(it, roomsById, lang) } ?: emptyList()
             _uiState.update {

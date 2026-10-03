@@ -23,7 +23,8 @@ data class RouteStep(
 data class RouteSegment(
     val floorLevel: Int,
     val points: List<Point2D>,
-    val length: Float
+    val length: Float,
+    val floorId: String = "tang-$floorLevel"
 )
 
 data class TransferInfo(
@@ -31,6 +32,12 @@ data class TransferInfo(
     val kind: String,
     val roomA: Room,
     val roomB: Room
+)
+
+data class RouteAssumptions(
+    val metersPerPx: Double = 0.08,
+    val walkSpeedMps: Double = 1.1,
+    val floorChangeSec: Double = 40.0
 )
 
 data class HospitalRoute(
@@ -43,5 +50,11 @@ data class HospitalRoute(
     val pathNodeIds: List<String>,
     val pathNodes: List<MapNode> = emptyList(),
     val segments: List<RouteSegment> = emptyList(),
-    val transfer: TransferInfo? = null
+    val transfer: TransferInfo? = null,
+    val assumptions: RouteAssumptions = RouteAssumptions()
 )
+
+sealed interface RouteFetchResult {
+    data class Success(val route: HospitalRoute) : RouteFetchResult
+    data class Error(val errorType: String, val message: String? = null) : RouteFetchResult
+}
