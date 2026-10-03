@@ -178,14 +178,9 @@ class HospitalMapViewModel(
             getHospitalMapUseCase().collect { mapData ->
                 val allRooms = mapData.floors.flatMap { it.rooms }
                 roomsById = allRooms.associateBy { it.id }
-                val start = allRooms.find { it.id == "tang-2_48" }
-                    ?: allRooms.find { it.floorLevel == 2 && it.name.contains("ĐĂNG KÝ") }
-                    ?: allRooms.find { it.floorLevel == 2 }
-                    ?: allRooms.firstOrNull()
-                val dest = allRooms.find { it.id == "tang-2_59" }
-                    ?: allRooms.find { it.floorLevel == 2 && it.name.contains("NỘI") }
-                    ?: allRooms.find { it.floorLevel == 2 && it.name.contains("SIÊU ÂM") }
-                    ?: allRooms.lastOrNull()
+                // Same defaults as the web (DEFAULT_FROM / DEFAULT_TO in app.js)
+                val start = allRooms.find { it.floorId == "tang-2" && it.rawId == 48 } // "Quầy đăng ký khám"
+                val dest = allRooms.find { it.floorId == "tang-3" && it.rawId == 4 }
 
                 _uiState.update {
                     it.copy(
@@ -290,15 +285,17 @@ class HospitalMapViewModel(
 
     fun onSelectStartRoom(room: Room) {
         goLive()
+        val resume = _uiState.value.isNavigating
         setStart(room)
         _uiState.update { it.copy(isSearchActive = false, selectedRoom = null, isNavigating = false) }
-        calculateRoute(focusMapOnRoute = true)
+        calculateRoute(focusMapOnRoute = true, resumeNavigation = resume)
     }
 
     fun onSelectDestRoom(room: Room) {
         goLive()
+        val resume = _uiState.value.isNavigating
         _uiState.update { it.copy(destRoom = room, isSearchActive = false, selectedRoom = null, isNavigating = false) }
-        calculateRoute(focusMapOnRoute = true)
+        calculateRoute(focusMapOnRoute = true, resumeNavigation = resume)
     }
 
     fun onSwapRooms() {
@@ -481,7 +478,8 @@ class HospitalMapViewModel(
 
     // ---------------------------------------------------------------- routing
 
-    private fun calculateRoute(focusMapOnRoute: Boolean) {
+    /** [resumeNavigation]: a place was changed mid-directions; restart directions on the new route (web: reroute()). */
+    private fun calculateRoute(focusMapOnRoute: Boolean, resumeNavigation: Boolean = false) {
         val s = _uiState.value
         val start = s.startRoom
         val dest = s.destRoom
@@ -509,6 +507,7 @@ class HospitalMapViewModel(
                 )
             }
             if (route != null && !_uiState.value.isNavigating) placeAtRouteStart(route)
+            if (route != null && resumeNavigation) onStartNavigation()
         }
     }
 

@@ -53,6 +53,8 @@ fun RoomDetailSheet(
     onClose: () -> Unit,
     onRouteTo: () -> Unit,
     onRouteFrom: () -> Unit,
+    helpStatus: String? = null,
+    onAskHelp: (() -> Unit)? = null, // web shows "Tôi bị lạc" under the room card too
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -93,6 +95,9 @@ fun RoomDetailSheet(
                 PrimaryAction(l.t(language, "Đến đây", "Go here"), Icons.Default.Directions, "btn_route_to_room", onRouteTo)
                 OutlineAction(l.t(language, "Đi từ đây", "Start here"), Icons.Default.TripOrigin, "btn_route_from_room", onRouteFrom)
             }
+        }
+        if (onAskHelp != null) {
+            HelpAssistanceCard(helpStatus = helpStatus, language = language, onAskHelp = onAskHelp, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }

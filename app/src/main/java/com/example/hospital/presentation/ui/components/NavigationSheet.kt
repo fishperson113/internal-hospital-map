@@ -88,6 +88,11 @@ fun NavigationSheet(
     onExit: () -> Unit,
     helpStatus: String? = null,
     onAskHelp: (() -> Unit)? = null,
+    // Web navHtml: "Từ X Đổi · Đến Y Đổi" — changing a place re-routes and keeps directions on
+    startLabel: String = "",
+    destLabel: String = "",
+    onChangeStart: () -> Unit = {},
+    onChangeDest: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -206,6 +211,9 @@ fun NavigationSheet(
                 )
             }
         }
+
+        PlaceRow(l.t(language, "Từ", "From"), startLabel, language, onChangeStart)
+        PlaceRow(l.t(language, "Đến", "To"), destLabel, language, onChangeDest)
 
         if (onAskHelp != null) {
             HelpAssistanceCard(

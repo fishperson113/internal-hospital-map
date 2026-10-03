@@ -37,6 +37,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hospital.domain.model.HospitalRoute
+import com.example.hospital.domain.model.Room
 import com.example.hospital.domain.model.StepIconType
 import com.example.hospital.presentation.state.RouteStepUi
 import com.example.hospital.presentation.state.TransferPreference
@@ -195,15 +197,56 @@ fun RouteBottomSheet(
                     }
                 }
 
-                if (onAskHelp != null) {
-                    HelpAssistanceCard(
-                        helpStatus = helpStatus,
-                        language = language,
-                        onAskHelp = onAskHelp,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
             }
+        }
+        // Web: "Tôi bị lạc" whenever there is a start place, also while loading or on a route error.
+        if (onAskHelp != null) {
+            HelpAssistanceCard(
+                helpStatus = helpStatus,
+                language = language,
+                onAskHelp = onAskHelp,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+}
+
+/** No destination yet (web: idleHtml): where the user starts + "Đổi", a hint, and "Tôi bị lạc". */
+@Composable
+fun IdleSheet(
+    startRoom: Room?,
+    language: AppLanguage,
+    onChangeStart: () -> Unit,
+    helpStatus: String?,
+    onAskHelp: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val l = HospitalLocalization
+    MapBottomSheetContainer(modifier = modifier.testTag("idle_sheet")) {
+        if (startRoom != null) {
+            PlaceRow(
+                l.t(language, "Điểm xuất phát", "Starting point"),
+                "${l.roomLabel(startRoom, language)} · ${l.getFloorLabel(startRoom.floorLevel, language)}",
+                language, onChangeStart
+            )
+        }
+        Text(
+            l.t(language, "Hoặc mở một tầng, chạm vào phòng hoặc chỗ bạn đang đứng trên bản đồ.", "Or open a floor and tap a room or the spot where you stand."),
+            fontSize = 13.sp, color = MapInkMuted, lineHeight = 18.sp
+        )
+        if (startRoom != null) {
+            HelpAssistanceCard(helpStatus = helpStatus, language = language, onAskHelp = onAskHelp, modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+}
+
+/** "Label: place   Đổi" (web: hint with a "Đổi" link that opens the search). */
+@Composable
+internal fun PlaceRow(label: String, place: String, language: AppLanguage, onChange: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text("$label: $place", fontSize = 14.sp, color = MapInk, maxLines = 2, modifier = Modifier.weight(1f))
+        TextButton(onClick = onChange) {
+            Text(HospitalLocalization.t(language, "Đổi", "Change"), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MapBluePrimary)
         }
     }
 }

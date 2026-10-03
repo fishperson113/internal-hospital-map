@@ -38,6 +38,7 @@ import com.example.hospital.presentation.ui.components.FloorEmptyCard
 import com.example.hospital.presentation.ui.components.FloorRail
 import com.example.hospital.presentation.ui.components.CompassFab
 import com.example.hospital.presentation.ui.components.HospitalCanvasMap
+import com.example.hospital.presentation.ui.components.IdleSheet
 import com.example.hospital.presentation.ui.components.MapFab
 import com.example.hospital.presentation.ui.components.MapViewportInsets
 import com.example.hospital.presentation.ui.components.NavigationBanner
@@ -258,14 +259,20 @@ fun HospitalMapScreen(
                     onSimulateStep = viewModel::onSimulateStep,
                     onExit = viewModel::onStopNavigation,
                     helpStatus = ui.helpStatus,
-                    onAskHelp = viewModel::onAskHelp
+                    onAskHelp = viewModel::onAskHelp,
+                    startLabel = ui.startRoom?.let { l.roomLabel(it, lang) }.orEmpty(),
+                    destLabel = ui.destRoom?.let { l.roomLabel(it, lang) }.orEmpty(),
+                    onChangeStart = { viewModel.onOpenSearch(isStartRoom = true) },
+                    onChangeDest = { viewModel.onOpenSearch(isStartRoom = false) }
                 )
                 selected != null -> RoomDetailSheet(
                     room = selected,
                     language = lang,
                     onClose = viewModel::onDismissRoomDetails,
                     onRouteTo = viewModel::onRouteToSelectedRoom,
-                    onRouteFrom = viewModel::onRouteFromSelectedRoom
+                    onRouteFrom = viewModel::onRouteFromSelectedRoom,
+                    helpStatus = ui.helpStatus,
+                    onAskHelp = viewModel::onAskHelp.takeIf { ui.startRoom != null }
                 )
                 hasRoute -> RouteBottomSheet(
                     route = ui.currentRoute,
@@ -278,6 +285,13 @@ fun HospitalMapScreen(
                     onToggleExpand = viewModel::onToggleRouteDetails,
                     onStepClick = viewModel::onFocusStep,
                     onStartNavigation = viewModel::onStartNavigation,
+                    helpStatus = ui.helpStatus,
+                    onAskHelp = viewModel::onAskHelp
+                )
+                else -> IdleSheet(
+                    startRoom = ui.startRoom,
+                    language = lang,
+                    onChangeStart = { viewModel.onOpenSearch(isStartRoom = true) },
                     helpStatus = ui.helpStatus,
                     onAskHelp = viewModel::onAskHelp
                 )
