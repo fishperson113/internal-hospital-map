@@ -62,7 +62,8 @@ data class HospitalMapUiState(
     // Real-time sensor positioning & orientation
     val userPosition: com.example.hospital.domain.model.Point2D? = null,
     val userFloorLevel: Int? = null,
-    val userHeadingDegrees: Float = 0f,
+    val userHeadingDegrees: Float = 0f,       // raw compass, only for the compass button
+    val userPlanHeading: Float? = null,       // facing direction on the plan (route + gyro); null = no arrow
     val stepCount: Int = 0,
     val isAutoRotateEnabled: Boolean = false,
     val isSensorTrackingActive: Boolean = false,
@@ -70,6 +71,7 @@ data class HospitalMapUiState(
     val sensorDiagnostics: String = "",       // raw sensor counters, shown when the telemetry badge is tapped
     val floorChangeSuggested: Boolean = false, // barometer says the user changed floor: point at "Bước tiếp theo"
     val hasArrivedAtDestination: Boolean = false,
+    val isOffRoute: Boolean = false, // walked away from the line: re-routing from the dot, tap the map to correct
 
     // CRM WebSocket live assistance ("Tôi bị lạc")
     val helpStatus: String? = null,

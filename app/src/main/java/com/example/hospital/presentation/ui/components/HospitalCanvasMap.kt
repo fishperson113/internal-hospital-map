@@ -100,7 +100,7 @@ fun HospitalCanvasMap(
     recenterRequest: Int,
     userPosition: Point2D? = null,
     userFloorLevel: Int? = null,
-    userHeadingDegrees: Float = 0f,
+    userHeadingDegrees: Float? = null, // plan heading (0 = up, clockwise); null = dot without arrow
     isNavigating: Boolean = false,
     isAutoRotateEnabled: Boolean = false,
     onRoomClick: (Room) -> Unit,
@@ -201,11 +201,12 @@ fun HospitalCanvasMap(
         label = "pulse_progress"
     )
 
-    // When auto-rotate is enabled during navigation in 2D, smoothly align camera spin with user compass heading
+    // When auto-rotate is enabled during navigation in 2D, turn the map so the user's facing direction points up
     LaunchedEffect(isAutoRotateEnabled, userHeadingDegrees, selectedFloorLevel, isNavigating, isTransitioning) {
-        if (isAutoRotateEnabled && isNavigating && selectedFloorLevel != null && !isTransitioning) {
+        val h = userHeadingDegrees
+        if (h != null && isAutoRotateEnabled && isNavigating && selectedFloorLevel != null && !isTransitioning) {
             val c = camera ?: return@LaunchedEffect
-            val targetSpin = (userHeadingDegrees + 90f) % 360f
+            val targetSpin = (360f - h) % 360f // MapProjector rotates the plan by +spin: heading h is up at spin = -h
             var diff = (targetSpin - c.spinDeg) % 360f
             if (diff > 180f) diff -= 360f
             if (diff < -180f) diff += 360f
@@ -546,7 +547,7 @@ private fun DrawScope.drawRoutePins(
 private fun DrawScope.drawUserLocationWithHeading(
     position: Point2D,
     floorLevel: Int,
-    headingDegrees: Float,
+    headingDegrees: Float?,
     floorVisuals: Map<Int, FloorVisual>,
     pj: MapProjector,
     alpha: Float,
@@ -558,60 +559,59 @@ private fun DrawScope.drawUserLocationWithHeading(
     val z = vis.z
     val centerScreen = pj.project(position.x, position.y, z)
 
-    // Calculate heading vector in plan coordinates: 0° = North (-Y), 90° = East (+X)
-    val rad = Math.toRadians(headingDegrees.toDouble())
-    val forwardX = position.x + (30f * kotlin.math.sin(rad)).toFloat()
-    val forwardY = position.y - (30f * kotlin.math.cos(rad)).toFloat()
-    val forwardScreen = pj.project(forwardX, forwardY, z)
-
-    val dirX = forwardScreen.x - centerScreen.x
-    val dirY = forwardScreen.y - centerScreen.y
-    val screenAngleRad = kotlin.math.atan2(dirY, dirX)
-
     val combinedAlpha = alpha * vis.alpha
 
-    // 1. Directional Flashlight Beam / Heading Cone (Cơ chế xoay chỉ hướng theo cảm biến điện thoại)
-    val beamRadius = 48.dp.toPx()
-    val coneHalfAngle = Math.toRadians(32.0).toFloat()
-    val leftAngle = screenAngleRad - coneHalfAngle
-    val rightAngle = screenAngleRad + coneHalfAngle
-
-    val beamPath = Path().apply {
-        moveTo(centerScreen.x, centerScreen.y)
-        val steps = 8
-        for (i in 0..steps) {
-            val a = leftAngle + (rightAngle - leftAngle) * (i.toFloat() / steps)
-            val bx = centerScreen.x + beamRadius * kotlin.math.cos(a)
-            val by = centerScreen.y + beamRadius * kotlin.math.sin(a)
-            lineTo(bx, by)
-        }
-        close()
+    // Facing direction (plan heading: 0° = up (-Y), 90° = right (+X)) on screen; no cone/chevron when unknown
+    val screenAngleRad: Float? = headingDegrees?.let { h ->
+        val rad = Math.toRadians(h.toDouble())
+        val forward = pj.project(position.x + (30f * kotlin.math.sin(rad)).toFloat(), position.y - (30f * kotlin.math.cos(rad)).toFloat(), z)
+        kotlin.math.atan2(forward.y - centerScreen.y, forward.x - centerScreen.x)
     }
 
-    // Cone radial gradient: vivid soft blue at origin, fading to transparent at outer perimeter
-    drawPath(
-        path = beamPath,
-        brush = Brush.radialGradient(
-            colors = listOf(
-                MapBluePrimary.copy(alpha = 0.58f * combinedAlpha),
-                MapBluePrimary.copy(alpha = 0.20f * combinedAlpha),
-                Color.Transparent
-            ),
-            center = centerScreen,
-            radius = beamRadius
-        )
-    )
+    if (screenAngleRad != null) {
+        // 1. Directional Flashlight Beam / Heading Cone (Cơ chế xoay chỉ hướng theo cảm biến điện thoại)
+        val beamRadius = 48.dp.toPx()
+        val coneHalfAngle = Math.toRadians(32.0).toFloat()
+        val leftAngle = screenAngleRad - coneHalfAngle
+        val rightAngle = screenAngleRad + coneHalfAngle
 
-    // Heading central beam pointer
-    val tipX = centerScreen.x + (beamRadius * 0.72f) * kotlin.math.cos(screenAngleRad)
-    val tipY = centerScreen.y + (beamRadius * 0.72f) * kotlin.math.sin(screenAngleRad)
-    drawLine(
-        color = MapBluePrimary.copy(alpha = 0.85f * combinedAlpha),
-        start = centerScreen,
-        end = Offset(tipX, tipY),
-        strokeWidth = 2.5.dp.toPx(),
-        cap = StrokeCap.Round
-    )
+        val beamPath = Path().apply {
+            moveTo(centerScreen.x, centerScreen.y)
+            val steps = 8
+            for (i in 0..steps) {
+                val a = leftAngle + (rightAngle - leftAngle) * (i.toFloat() / steps)
+                val bx = centerScreen.x + beamRadius * kotlin.math.cos(a)
+                val by = centerScreen.y + beamRadius * kotlin.math.sin(a)
+                lineTo(bx, by)
+            }
+            close()
+        }
+
+        // Cone radial gradient: vivid soft blue at origin, fading to transparent at outer perimeter
+        drawPath(
+            path = beamPath,
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    MapBluePrimary.copy(alpha = 0.58f * combinedAlpha),
+                    MapBluePrimary.copy(alpha = 0.20f * combinedAlpha),
+                    Color.Transparent
+                ),
+                center = centerScreen,
+                radius = beamRadius
+            )
+        )
+
+        // Heading central beam pointer
+        val tipX = centerScreen.x + (beamRadius * 0.72f) * kotlin.math.cos(screenAngleRad)
+        val tipY = centerScreen.y + (beamRadius * 0.72f) * kotlin.math.sin(screenAngleRad)
+        drawLine(
+            color = MapBluePrimary.copy(alpha = 0.85f * combinedAlpha),
+            start = centerScreen,
+            end = Offset(tipX, tipY),
+            strokeWidth = 2.5.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+    }
 
     // 2. Animated Radar Pulse Wave
     val maxPulseRadius = 26.dp.toPx()
@@ -643,6 +643,7 @@ private fun DrawScope.drawUserLocationWithHeading(
     )
 
     // 4. Directional Navigation Chevron / Pointer right on the location dot
+    if (screenAngleRad == null) return
     val arrowLen = 6.dp.toPx()
     val arrowWidth = 4.5.dp.toPx()
     val arrowTipX = centerScreen.x + arrowLen * kotlin.math.cos(screenAngleRad)

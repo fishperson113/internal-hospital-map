@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.text.Normalizer
+import android.os.SystemClock
 import kotlin.math.roundToInt
 
 /**
@@ -48,8 +49,11 @@ class HospitalMapViewModel(
     private var routeJob: Job? = null
     private var searchJob: Job? = null
     private var sensorJob: Job? = null
-    private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker()
+    private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker(::walkable)
     private var lastWalkedMeters = 0f
+    private var lastStepMs = 0L
+    private var offRouteMeters = 0f // walked off route since the last re-route
+    private var lastRerouteMs = 0L
     private var pressureAtStart: Float? = null // barometer when the walk on the start floor began
     private var live = false // like the web: the CRM sees the user once they pick a place / start / ask help
     private val liveClient = com.example.hospital.data.api.LiveClient(context = sensorManager?.context) { status ->
@@ -77,13 +81,19 @@ class HospitalMapViewModel(
                 val dm = data.walkedMeters - lastWalkedMeters
                 lastWalkedMeters = data.walkedMeters
                 if (dm > 0f && _uiState.value.isNavigating) {
-                    pdrTracker.onWalked(dm, data.yawDegrees)?.let(::applyPdrUpdate)
+                    lastStepMs = SystemClock.elapsedRealtime()
+                    pdrTracker.onWalked(dm, data.yawDegrees)?.let { st ->
+                        applyPdrUpdate(st)
+                        if (st.offRoute) offRouteMeters += dm
+                    }
                 }
+                maybeReroute()
                 val heading = data.headingDegrees
                 val d = data.diag
                 _uiState.update {
                     it.copy(
                         userHeadingDegrees = heading,
+                        userPlanHeading = if (it.isNavigating) pdrTracker.planHeading(data.yawDegrees) else null,
                         stepCount = data.totalSteps,
                         isSensorTrackingActive = data.isTracking,
                         sensorTelemetryText = "${heading.toInt()}° ${getCompassDirection(heading)} · ${data.totalSteps} bước · ${"%.1f".format(data.walkedMeters)} m",
@@ -117,7 +127,10 @@ class HospitalMapViewModel(
 
     companion object {
         const val FLOOR_HINT_HPA = 0.3f // calibration knob: pressure change per floor that triggers the hint
-        const val TEST_STEP_M = 0.65f   // "+1 bước" test button
+        // Off route: route again from the dot when the user pauses, or every few meters while walking on.
+        const val REROUTE_EVERY_M = 10f
+        const val REROUTE_PAUSE_MS = 2_000L
+        const val REROUTE_MIN_GAP_MS = 5_000L
     }
 
     fun onPermissionsUpdated() {
@@ -126,8 +139,33 @@ class HospitalMapViewModel(
 
     private fun applyPdrUpdate(pdr: com.example.hospital.sensor.IndoorPdrState) {
         _uiState.update {
-            it.copy(userPosition = pdr.position, userFloorLevel = pdr.floorLevel, hasArrivedAtDestination = pdr.hasArrived)
+            it.copy(
+                userPosition = pdr.position, userFloorLevel = pdr.floorLevel,
+                hasArrivedAtDestination = pdr.hasArrived, isOffRoute = pdr.offRoute
+            )
         }
+    }
+
+    /** Corridor test for free walking: inside the floor plan and not inside any room. */
+    private fun walkable(level: Int, p: Point2D): Boolean {
+        val f = _uiState.value.floors.find { it.level == level } ?: return true
+        val fr = f.frame
+        if (fr.size >= 4 && (p.x !in fr[0]..fr[2] || p.y !in fr[1]..fr[3])) return false
+        return f.rooms.none { HospitalGeometry.pointInPolygon(p.x, p.y, it.polygon) }
+    }
+
+    /** Off route: route again from where the dot is (the server takes a "floor@x,y" start), directions go on. */
+    private fun maybeReroute() {
+        val s = _uiState.value
+        if (!s.isNavigating || !s.isOffRoute || s.isRouteCalculating || offRouteMeters <= 0f) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRerouteMs < REROUTE_MIN_GAP_MS) return
+        if (offRouteMeters < REROUTE_EVERY_M && now - lastStepMs < REROUTE_PAUSE_MS) return
+        val pos = s.userPosition ?: return
+        val floor = s.floors.find { it.level == s.userFloorLevel } ?: return
+        lastRerouteMs = now
+        offRouteMeters = 0f
+        onSelectStartRoom(spotRoom(floor, pos))
     }
 
     /** Like the web: when not walking, the user's dot IS the start of the route (one marker). */
@@ -220,8 +258,13 @@ class HospitalMapViewModel(
 
     // ---------------------------------------------------------------- rooms on the map
 
+    /** While navigating off route, a tap on the map = "I am here": correct the position and re-route. */
     fun onRoomTapped(room: Room) {
-        if (_uiState.value.isNavigating) return
+        val s = _uiState.value
+        if (s.isNavigating) {
+            if (s.isOffRoute) onSelectStartRoom(room)
+            return
+        }
         _uiState.update { it.copy(selectedRoom = room, isRouteDetailsExpanded = false) }
     }
 
@@ -229,7 +272,6 @@ class HospitalMapViewModel(
         _uiState.update { it.copy(selectedRoom = null) }
     }
 
-    /** Background tap: close the room sheet / collapse the directions list. */
     /**
      * Tap outside any room. In 2D inside the floor plan it picks that spot (web: tap()), so the
      * user can say "I am here" anywhere in a corridor; elsewhere it just closes the sheets.
@@ -240,7 +282,11 @@ class HospitalMapViewModel(
         val fr = floor?.frame
         val inside = point != null && floor != null && !floor.isTodo &&
             (fr == null || fr.size < 4 || (point.x in fr[0]..fr[2] && point.y in fr[1]..fr[3]))
-        val spot = if (inside && !s.isNavigating) spotRoom(floor!!, point!!) else null
+        val spot = if (inside) spotRoom(floor!!, point!!) else null
+        if (s.isNavigating) {
+            if (s.isOffRoute && spot != null) onSelectStartRoom(spot)
+            return
+        }
         _uiState.update { it.copy(selectedRoom = spot, isRouteDetailsExpanded = false) }
     }
 
@@ -301,14 +347,15 @@ class HospitalMapViewModel(
         goLive()
         val resume = _uiState.value.isNavigating
         setStart(room)
-        _uiState.update { it.copy(isSearchActive = false, selectedRoom = null, isNavigating = false) }
+        // Directions stay on while the new route loads (web: reroute()); it restarts on the new route.
+        _uiState.update { it.copy(isSearchActive = false, selectedRoom = null) }
         calculateRoute(focusMapOnRoute = true, resumeNavigation = resume)
     }
 
     fun onSelectDestRoom(room: Room) {
         goLive()
         val resume = _uiState.value.isNavigating
-        _uiState.update { it.copy(destRoom = room, isSearchActive = false, selectedRoom = null, isNavigating = false) }
+        _uiState.update { it.copy(destRoom = room, isSearchActive = false, selectedRoom = null) }
         calculateRoute(focusMapOnRoute = true, resumeNavigation = resume)
     }
 
@@ -360,6 +407,7 @@ class HospitalMapViewModel(
         _uiState.update {
             it.copy(
                 isNavigating = true,
+                isOffRoute = false,
                 navStepIndex = 0,
                 selectedRoom = null,
                 isRouteDetailsExpanded = false,
@@ -391,10 +439,6 @@ class HospitalMapViewModel(
         if (prev == 0) pressureAtStart = sensorManager?.sensorData?.value?.pressureHpa
     }
 
-    fun onSimulateStep() {
-        if (!_uiState.value.isNavigating) return
-        pdrTracker.onWalked(TEST_STEP_M, yawDeg = null)?.let(::applyPdrUpdate)
-    }
 
     fun onToggleAutoRotate() {
         _uiState.update { it.copy(isAutoRotateEnabled = !it.isAutoRotateEnabled) }
@@ -404,6 +448,7 @@ class HospitalMapViewModel(
         _uiState.update {
             it.copy(
                 isNavigating = false,
+                isOffRoute = false,
                 navStepIndex = 0,
                 isAutoRotateEnabled = false,
                 hasArrivedAtDestination = false
@@ -523,7 +568,7 @@ class HospitalMapViewModel(
                 )
             }
             if (route != null && !_uiState.value.isNavigating) placeAtRouteStart(route)
-            if (route != null && resumeNavigation) onStartNavigation()
+            if (resumeNavigation) { if (route != null) onStartNavigation() else onStopNavigation() }
         }
     }
 

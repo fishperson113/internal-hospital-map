@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -245,7 +246,7 @@ fun IdleSheet(
 internal fun PlaceRow(label: String, place: String, language: AppLanguage, onChange: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text("$label: $place", fontSize = 14.sp, color = MapInk, maxLines = 2, modifier = Modifier.weight(1f))
-        TextButton(onClick = onChange) {
+        TextButton(onClick = onChange, contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(32.dp)) {
             Text(HospitalLocalization.t(language, "Đổi", "Change"), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MapBluePrimary)
         }
     }

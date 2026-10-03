@@ -77,6 +77,54 @@ class IndoorPdrTrackerTest {
     }
 
     @Test
+    fun `facing direction comes from the line plus gyro turn, no compass`() {
+        val pdr = IndoorPdrTracker()
+        pdr.initialize(lShape)
+        assertEquals(90f, pdr.planHeading(null)!!, 0.01f) // before any step: along the line (right)
+        pdr.onWalked(step, yawDeg = 30f)                 // gyro 30° = "along the line" from now on
+        assertEquals(100f, pdr.planHeading(40f)!!, 0.01f)
+        walk(pdr, 14, yaw = 30f)                          // waiting at the corner
+        assertEquals(180f, pdr.planHeading(120f)!!, 0.01f) // turned right: facing down the next leg
+        pdr.onWalked(step, yawDeg = 120f)
+        assertEquals(180f, pdr.planHeading(120f)!!, 0.01f)
+        assertNull(IndoorPdrTracker().planHeading(0f)) // no directions: no arrow
+    }
+
+    private val straight = route(listOf(RouteSegment(2, listOf(Point2D(0f, 0f), Point2D(300f, 0f)), 20f)))
+
+    @Test
+    fun `walking away from the line leaves the route and moves freely from where it began`() {
+        val pdr = IndoorPdrTracker()
+        pdr.initialize(straight)
+        walk(pdr, 2, yaw = 0f)                       // along the line (right), x = 20
+        val left = walk(pdr, 7, yaw = 90f)           // turned right (down on the plan) for 4.55 m
+        assertTrue(left.offRoute)
+        assertAt(20f, 70f, left.position)            // replayed from where the turn began
+        assertAt(20f, 80f, pdr.onWalked(step, 90f)!!.position)
+        assertEquals(180f, pdr.planHeading(90f)!!, 0.01f)
+    }
+
+    @Test
+    fun `free walking stays in corridors and slides along walls`() {
+        val pdr = IndoorPdrTracker(walkable = { _, p -> p.y < 50f }) // a room below y = 50
+        pdr.initialize(straight)
+        walk(pdr, 2, yaw = 0f)
+        val s = walk(pdr, 12, yaw = 135f) // diagonal down-left into the room
+        assertTrue(s.offRoute)
+        assertTrue("y ${s.position.y}", s.position.y < 50f)
+        assertTrue("x ${s.position.x}", s.position.x < 20f) // kept moving along the wall
+    }
+
+    @Test
+    fun `going straight far past a corner also leaves the route`() {
+        val pdr = IndoorPdrTracker()
+        pdr.initialize(lShape)
+        val s = walk(pdr, 26, yaw = 0f) // corner at 10 steps, then 16 steps (10.4 m) straight on
+        assertTrue(s.offRoute)
+        assertTrue("x ${s.position.x}", s.position.x > 150f)
+    }
+
+    @Test
     fun `floor changes only through goToStep`() {
         val shaft = Room(id = "a", code = "", name = "", floorLevel = 2, category = RoomCategory.STAIRS, nodeId = "")
         val r = route(
