@@ -16,15 +16,15 @@ enum class TransferPreference(val roomKind: String?) {
 
 /**
  * One row of the directions list / one screen of turn-by-turn navigation.
- * [focusFloorLevel] = floor the map should show for this step; null = the 3D stack
- * (used for floor-change steps so the user sees the elevator/stairs connecting floors).
+ * [focusFloorLevel] = floor the map should show for this step, always a 2D floor
+ * (a floor change shows the floor the user stands on, with the elevator/stairs). Never the 3D stack.
  */
 data class RouteStepUi(
     val iconType: StepIconType,
     val title: String,
     val subtitle: String,
     val chipLabel: String,
-    val focusFloorLevel: Int?,
+    val focusFloorLevel: Int,
     val distanceMeters: Float,
     val isTransfer: Boolean
 )
@@ -62,16 +62,20 @@ data class HospitalMapUiState(
     // Real-time sensor positioning & orientation
     val userPosition: com.example.hospital.domain.model.Point2D? = null,
     val userFloorLevel: Int? = null,
-    val userHeadingDegrees: Float = 0f,       // raw compass, only for the compass button
-    val userPlanHeading: Float? = null,       // facing direction on the plan (HeadingFusion: compass - PLAN_NORTH_DEG, gyro, route); null = no arrow
+    val userPlanHeading: Float? = null,       // facing direction on the plan (HeadingFusion or RoNIN, north = positioning.plan_north_deg); null = no arrow
     val stepCount: Int = 0,
-    val isAutoRotateEnabled: Boolean = false,
+    // Directions camera (web D29, FOLLOW in app.js): follows the dot, heading-up by the route, tilted.
+    // A drag stops following, the recenter button resumes it.
+    val isFollowing: Boolean = false,
+    val routeCourse: Float? = null, // plan direction of the route piece under the dot; the map turns to it
     val isSensorTrackingActive: Boolean = false,
     val sensorTelemetryText: String = "",
     val sensorDiagnostics: String = "",       // raw sensor counters, shown when the telemetry badge is tapped
     val floorChangeSuggested: Boolean = false, // barometer says the user changed floor: point at "Bước tiếp theo"
     val hasArrivedAtDestination: Boolean = false,
     val isOffRoute: Boolean = false, // walked away from the line: re-routing from the dot, tap the map to correct
+    val isWalkingBack: Boolean = false, // walking back the way the user came: the dot slides back along the route
+    val isRoninMode: Boolean = false,   // positioning mode: false = Baseline (steps + gyro/compass), true = RoNIN (server)
 
     // CRM WebSocket live assistance ("Tôi bị lạc")
     val helpStatus: String? = null,

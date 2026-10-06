@@ -103,5 +103,7 @@ data class Graph(
 data class HospitalMapData(
     val hospital: Hospital,
     val floors: List<Floor>,
-    val graph: Graph
+    val graph: Graph,
+    /** null = not loaded from the server (offline data): sensors are ignored, like the web. */
+    val positioning: Positioning? = null
 )

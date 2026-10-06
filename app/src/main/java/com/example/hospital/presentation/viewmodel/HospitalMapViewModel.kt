@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.hospital.domain.model.Floor
 import com.example.hospital.domain.model.HospitalRoute
 import com.example.hospital.domain.model.Point2D
+import com.example.hospital.domain.model.Positioning
 import com.example.hospital.domain.model.Room
 import com.example.hospital.domain.model.RoomCategory
 import com.example.hospital.domain.util.HospitalGeometry
@@ -14,6 +15,16 @@ import com.example.hospital.domain.usecase.SearchRoomsUseCase
 import com.example.hospital.presentation.state.HospitalMapUiState
 import com.example.hospital.presentation.state.TransferPreference
 import com.example.hospital.presentation.util.AppLanguage
+import com.example.hospital.presentation.util.HospitalLocalization
+import com.example.hospital.data.api.RoninClient
+import com.example.hospital.sensor.HeadingFusion
+import com.example.hospital.sensor.HospitalSensorData
+import com.example.hospital.sensor.IndoorPdrState
+import com.example.hospital.sensor.IndoorPdrTracker
+import com.example.hospital.sensor.StepLearner
+import com.example.hospital.sensor.norm
+import com.example.hospital.sensor.wrap
+import android.content.Context
 import com.example.hospital.presentation.util.RouteStepFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,12 +34,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.text.Normalizer
 import android.os.SystemClock
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * Screen state for the indoor map. Camera (zoom / pan / 3D orbit / 3D↔2D animation) is
@@ -49,10 +67,30 @@ class HospitalMapViewModel(
     private var routeJob: Job? = null
     private var searchJob: Job? = null
     private var sensorJob: Job? = null
-    private val pdrTracker = com.example.hospital.sensor.IndoorPdrTracker(::walkable)
-    private val headingFusion = com.example.hospital.sensor.HeadingFusion()
+    private val prefs = sensorManager?.context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    // Positioning (web: POS, fusion, learner in app.js). Constants come from the server (GET /api/floors ->
+    // positioning); until they arrive the sensors are ignored and the dot stays at the start.
+    private var positioning: Positioning? = null
+    private var fusion: HeadingFusion? = null
+    private var learner: StepLearner? = null
+    private var pdrTracker: IndoorPdrTracker? = null // only while directions run
+    private var heading: Float? = null // walking direction on the plan (web: S.heading)
+    private var walkedSteps = 0        // since directions started (web: S.walked)
+    private var walkedM = 0f
     private var lastWalkedMeters = 0f
+    private var lastTotalSteps = 0
     private var lastStepMs = 0L
+
+    // RoNIN mode (web: `ronin` in app.js): the server turns raw motion into walking velocity, one pseudo step each.
+    // Its frame has no north: the compass over the first warmup samples turns it (roninOffset), then only the
+    // route pulls it (roninRoute).
+    private var roninOn = prefs?.getString(KEY_POS_MODE, null) == MODE_RONIN
+    private val roninWarm = mutableListOf<Double>()
+    private var roninOffset: Float? = null
+    private var roninRoute = 0f
+    private var roninRaw: Float? = null
+    private val roninClient = RoninClient(::onRoninVelocity)
     private var offRouteMeters = 0f // walked off route since the last re-route
     private var lastRerouteMs = 0L
     private var pressureAtStart: Float? = null // barometer when the walk on the start floor began
@@ -62,8 +100,12 @@ class HospitalMapViewModel(
     }
 
     init {
+        _uiState.update { it.copy(isRoninMode = roninOn) }
+        sensorManager?.setRoninMode(roninOn)
+        if (roninOn) roninClient.connect()
         loadMapData()
         startSensorObservation()
+        startPositioningTicker()
         // Same as the web's liveSync(): push the state to the doctor CRM whenever it changes.
         viewModelScope.launch {
             uiState.map(::liveJson).distinctUntilChanged().collect { json ->
@@ -72,50 +114,170 @@ class HospitalMapViewModel(
         }
     }
 
+    /** Steps from the sensor manager (Baseline mode only; RoNIN steps come from [onRoninVelocity]). */
     private fun startSensorObservation() {
         sensorManager?.startTracking()
         sensorJob?.cancel()
         sensorJob = viewModelScope.launch {
             sensorManager?.sensorData?.collect { data ->
-                // While directions are on, meters walked slide the dot along the route;
-                // gyro turns snap it to / hold it at corners (IndoorPdrTracker).
-                // Facing direction on the plan: compass - PLAN_NORTH_DEG as reference, gyro for smoothness.
-                val planHeading = headingFusion.update(data.headingDegrees, data.yawDegrees)
                 val dm = data.walkedMeters - lastWalkedMeters
+                val dn = data.totalSteps - lastTotalSteps
                 lastWalkedMeters = data.walkedMeters
-                if (dm > 0f && _uiState.value.isNavigating) {
-                    lastStepMs = SystemClock.elapsedRealtime()
-                    pdrTracker.onWalked(dm, planHeading)?.let { st ->
-                        applyPdrUpdate(st)
-                        if (st.offRoute) offRouteMeters += dm
-                    }
-                    // Walking straight along the line: let the route fine-tune the heading reference.
-                    val line = pdrTracker.lineHeading()
-                    if (line != null && planHeading != null &&
-                        kotlin.math.abs(com.example.hospital.sensor.wrap(planHeading - line)) < 20f
-                    ) headingFusion.alignTo(line, data.yawDegrees)
+                lastTotalSteps = data.totalSteps
+                // one publish may carry several steps: feed them one by one, like the web
+                if (dm > 0f && !roninOn) {
+                    val n = maxOf(1, dn)
+                    repeat(n) { onStep(dm / n) }
                 }
-                maybeReroute()
-                val heading = data.headingDegrees ?: 0f
-                val d = data.diag
                 _uiState.update {
                     it.copy(
-                        userHeadingDegrees = heading,
-                        userPlanHeading = planHeading,
-                        stepCount = data.totalSteps,
                         isSensorTrackingActive = data.isTracking,
-                        sensorTelemetryText = "${heading.toInt()}° ${getCompassDirection(heading)} · ${data.totalSteps} bước · ${"%.1f".format(data.walkedMeters)} m",
-                        sensorDiagnostics = listOf(
-                            "Gia tốc ${d.accelHz} Hz · tự đếm ${d.accelSteps} bước · bước cuối ${"%.2f".format(d.lastStepM)} m",
-                            "Phần cứng: detector ${d.hwDetectorSteps} · counter ${d.hwCounterSteps} · bù +${d.catchUpSteps} · bỏ ${d.skippedSteps}",
-                            "Gyro ${data.yawDegrees?.let { y -> "%.0f°".format(y) } ?: "—"} · áp suất ${data.pressureHpa?.let { p -> "%.2f hPa".format(p) } ?: "—"}",
-                            "Cảm biến: ${data.activeSensors.joinToString()}"
-                        ).joinToString("\n"),
                         floorChangeSuggested = floorChangeSuggested(it, data.pressureHpa)
                     )
                 }
             }
         }
+    }
+
+    /** Server constants arrived: heading fusion, step detector and learner start (web: initPositioning). */
+    private fun initPositioning(p: Positioning) {
+        positioning = p
+        // the step length factor this phone learned last time
+        val savedK = prefs?.getFloat(KEY_STEP_K, 0f)?.takeIf { it > 0f } ?: p.stepK
+        fusion = HeadingFusion(p.planNorthDeg, p.fusion)
+        learner = StepLearner(savedK, p.learner)
+        sensorManager?.configureSteps(p.step, savedK)
+    }
+
+    /** One step of [len] metres in the direction [heading] (web: onStep). */
+    private fun onStep(len: Float) {
+        val p = positioning ?: return
+        walkedSteps++
+        walkedM += len
+        lastStepMs = SystemClock.elapsedRealtime()
+        val t = pdrTracker ?: return
+        if (!_uiState.value.isNavigating) return
+        val leg = t.onWalked(len, heading)
+        // a corner closed a leg of known length: learn this user's step length from it.
+        // RoNIN steps are not this user's steps.
+        val l = learner
+        if (leg != null && !roninOn && l != null && l.onLeg(leg.realM, leg.countedM)) {
+            sensorManager?.setStepK(l.k)
+            prefs?.edit()?.putFloat(KEY_STEP_K, l.k)?.apply()
+        }
+        // walking along the line: let the route fine-tune the heading
+        val line = t.lineHeading()
+        val h = heading
+        if (line != null && h != null && abs(wrap(h - line)) < p.fusion.routeGateDeg) {
+            if (roninOn) roninRoute += wrap(line - h) * p.fusion.routeGain
+            else fusion?.alignTo(line, sensorManager?.sensorData?.value?.yawDegrees)
+        }
+        val st = t.state()
+        if (st.offRoute) offRouteMeters += len
+        applyPdrUpdate(st)
+    }
+
+    /** 4 Hz: fuse the heading, RoNIN north and samples, telemetry, reroute when off the route (web: setInterval 250). */
+    private fun startPositioningTicker() {
+        viewModelScope.launch {
+            while (isActive) {
+                positioningTick()
+                delay(250)
+            }
+        }
+    }
+
+    private fun positioningTick() {
+        val p = positioning ?: return
+        val d = sensorManager?.sensorData?.value ?: return
+        val fused = fusion?.update(d.headingDegrees, d.yawDegrees)
+        heading = if (roninOn) roninTick(p, d.headingDegrees, d.relAzimuthDegrees) ?: fused else fused
+        // RoNIN gives the walking direction only while walking. The cone shows where the phone points: its relative
+        // orientation turned by the same north offset (and route correction), so it turns while the user stands still.
+        val o = roninOffset
+        val rel = d.relAzimuthDegrees
+        val facing = if (roninOn && o != null && rel != null) norm(rel + o - p.planNorthDeg + roninRoute) else heading
+        _uiState.update {
+            it.copy(
+                userPlanHeading = facing,
+                stepCount = walkedSteps,
+                sensorTelemetryText = telemetryText(p, d.headingDegrees, it.language),
+                sensorDiagnostics = diagnosticsText(d)
+            )
+        }
+        maybeReroute(p)
+    }
+
+    /** Sends the RoNIN samples, learns north. Returns the RoNIN heading (plan degrees) or null before the first one. */
+    private fun roninTick(p: Positioning, compass: Float?, rel: Float?): Float? {
+        sensorManager?.drainRoninBatch()?.let { if (it.isNotEmpty()) roninClient.send(it) }
+        if (roninOffset == null && compass != null && rel != null) {
+            roninWarm += Math.toRadians(wrap(compass - rel).toDouble())
+            if (roninWarm.size >= p.ronin.warmupSamples) { // circular mean
+                roninOffset = Math.toDegrees(atan2(roninWarm.sumOf { sin(it) }, roninWarm.sumOf { cos(it) })).toFloat()
+            }
+        }
+        return roninRaw?.let { norm(it + roninRoute) }
+    }
+
+    /** One velocity from /api/ronin = one pseudo step of speed * chunk_s metres. */
+    private fun onRoninVelocity(x: Float, y: Float) {
+        val p = positioning ?: return
+        val o = roninOffset ?: return // no north yet
+        val speed = hypot(x, y)
+        if (!roninOn || !(speed >= p.ronin.minSpeedMps)) return // standing
+        val raw = norm(Math.toDegrees(atan2(x, y).toDouble()).toFloat() + o - p.planNorthDeg)
+        roninRaw = raw
+        heading = norm(raw + roninRoute)
+        onStep(speed * p.ronin.chunkS)
+    }
+
+    private fun roninReset() {
+        roninWarm.clear()
+        roninOffset = null
+        roninRoute = 0f
+        roninRaw = null
+        sensorManager?.drainRoninBatch()
+    }
+
+    /** Map button: Baseline <-> RoNIN. RoNIN learns north again from scratch. The choice is kept. */
+    fun onTogglePositioningMode() {
+        roninOn = !roninOn
+        prefs?.edit()?.putString(KEY_POS_MODE, if (roninOn) MODE_RONIN else MODE_BASELINE)?.apply()
+        roninReset()
+        sensorManager?.setRoninMode(roninOn)
+        if (roninOn) roninClient.connect() else roninClient.close()
+        _uiState.update { it.copy(isRoninMode = roninOn) }
+    }
+
+    /** Web pdrText(), plus the plan north from the server. */
+    private fun telemetryText(p: Positioning, compass: Float?, lang: AppLanguage): String {
+        fun t(vi: String, en: String) = HospitalLocalization.t(lang, vi, en)
+        val sb = StringBuilder()
+        if (roninOn) sb.append("RoNIN").append(if (roninClient.isConnected) "" else " (${t("mất kết nối", "offline")})").append(" · ")
+        sb.append("📡 ").append(compass?.roundToInt()?.toString() ?: "—").append("°")
+        sb.append(" · ").append(t("bắc sơ đồ", "plan north")).append(" ").append(p.planNorthDeg.roundToInt()).append("°")
+        sb.append(" · ").append(walkedSteps).append(" ").append(t("bước", "steps"))
+        sb.append(" · ").append("%.1f".format(walkedM)).append(" m")
+        if (walkedSteps > 0) sb.append(" · ~").append("%.2f".format(walkedM / walkedSteps)).append(" m/").append(t("bước", "step"))
+        learner?.let { l ->
+            sb.append(" · k ").append("%.2f".format(l.k))
+            if (l.legs > 0) sb.append(" (").append(t("học", "learned")).append(" ").append(l.legs).append(")")
+        }
+        val dropped = fusion?.dropped ?: 0
+        if (dropped > 0) sb.append(" · ").append(t("lọc nhiễu từ", "magnetic noise dropped")).append(" ").append(dropped)
+        return sb.toString()
+    }
+
+    private fun diagnosticsText(data: HospitalSensorData): String {
+        val d = data.diag
+        return listOf(
+            "Gia tốc ${d.accelHz} Hz · tự đếm ${d.accelSteps} bước · bước cuối ${"%.2f".format(d.lastStepM)} m",
+            "Phần cứng (chỉ để so, không dùng): detector ${d.hwDetectorSteps} · counter ${d.hwCounterSteps}",
+            "Gyro ${data.yawDegrees?.let { y -> "%.0f°".format(y) } ?: "—"} · áp suất ${data.pressureHpa?.let { p -> "%.2f hPa".format(p) } ?: "—"}",
+            "RoNIN: bắc ${roninOffset?.let { "%.0f°".format(it) } ?: "đang học (${roninWarm.size})"} · kéo về tuyến ${"%.0f°".format(roninRoute)}",
+            "Cảm biến: ${data.activeSensors.joinToString()}"
+        ).joinToString("\n")
     }
 
     /**
@@ -135,21 +297,29 @@ class HospitalMapViewModel(
 
     companion object {
         const val FLOOR_HINT_HPA = 0.3f // calibration knob: pressure change per floor that triggers the hint
-        // Off route: route again from the dot when the user pauses, or every few meters while walking on.
-        const val REROUTE_EVERY_M = 10f
-        const val REROUTE_PAUSE_MS = 2_000L
-        const val REROUTE_MIN_GAP_MS = 5_000L
+        private const val PREFS_NAME = "hospital_pdr_prefs"
+        private const val KEY_STEP_K = "step_k"     // learned step length factor (web: localStorage.stepK)
+        private const val KEY_POS_MODE = "pos_mode" // web: localStorage.posMode
+        private const val MODE_RONIN = "ronin"
+        private const val MODE_BASELINE = "baseline"
+        // web app.js DEFAULT_FROM / DEFAULT_TO
+        private const val DEFAULT_FROM_FLOOR = "tang-2"
+        private const val DEFAULT_FROM_ID = 40
+        private const val DEFAULT_TO_FLOOR = "tang-3"
+        private const val DEFAULT_TO_ID = 1
     }
 
     fun onPermissionsUpdated() {
         sensorManager?.startTracking()
     }
 
-    private fun applyPdrUpdate(pdr: com.example.hospital.sensor.IndoorPdrState) {
+    private fun applyPdrUpdate(pdr: IndoorPdrState) {
         _uiState.update {
             it.copy(
                 userPosition = pdr.position, userFloorLevel = pdr.floorLevel,
-                hasArrivedAtDestination = pdr.hasArrived, isOffRoute = pdr.offRoute
+                hasArrivedAtDestination = pdr.hasArrived, isOffRoute = pdr.offRoute, isWalkingBack = pdr.backward,
+                // off the route or at a shaft there is no course: keep the last one
+                routeCourse = pdrTracker?.courseHeading() ?: it.routeCourse
             )
         }
     }
@@ -163,12 +333,12 @@ class HospitalMapViewModel(
     }
 
     /** Off route: route again from where the dot is (the server takes a "floor@x,y" start), directions go on. */
-    private fun maybeReroute() {
+    private fun maybeReroute(p: Positioning) {
         val s = _uiState.value
         if (!s.isNavigating || !s.isOffRoute || s.isRouteCalculating || offRouteMeters <= 0f) return
         val now = SystemClock.elapsedRealtime()
-        if (now - lastRerouteMs < REROUTE_MIN_GAP_MS) return
-        if (offRouteMeters < REROUTE_EVERY_M && now - lastStepMs < REROUTE_PAUSE_MS) return
+        if (now - lastRerouteMs < p.reroute.minGapMs) return
+        if (offRouteMeters < p.reroute.everyM && now - lastStepMs < p.reroute.pauseMs) return
         val pos = s.userPosition ?: return
         val floor = s.floors.find { it.level == s.userFloorLevel } ?: return
         lastRerouteMs = now
@@ -193,11 +363,14 @@ class HospitalMapViewModel(
             JSONObject().put("floor", floorId).put("x", p.x.toDouble()).put("y", p.y.toDouble())
         }
         val step = if (s.isNavigating) s.routeSteps.getOrNull(s.navStepIndex) else null
+        val transfer = s.currentRoute?.transfer
+        val at = if (s.isNavigating && transfer != null && s.navStepIndex > 0)
+            (if (s.navStepIndex == 1) transfer.roomA else transfer.roomB) else start
         return JSONObject()
             .put("type", "state")
             .put("from", room(start))
             .put("to", room(s.destRoom))
-            .put("at", room(start)) // ponytail: "near" = start place; nearest room to pos when the CRM needs it
+            .put("at", room(at)) // web liveState: the last landmark passed (start, then the shaft)
             .put("pos", pos)
             .put("nav", s.isNavigating)
             .put("step", s.navStepIndex)
@@ -218,36 +391,23 @@ class HospitalMapViewModel(
         liveClient.askHelp()
     }
 
-    private fun getCompassDirection(deg: Float): String {
-        val d = (deg + 22.5f) % 360f
-        return when ((d / 45f).toInt()) {
-            0 -> "B"
-            1 -> "ĐB"
-            2 -> "Đ"
-            3 -> "ĐN"
-            4 -> "N"
-            5 -> "TN"
-            6 -> "T"
-            7 -> "TB"
-            else -> "B"
-        }
-    }
-
     private fun loadMapData() {
         viewModelScope.launch {
             getHospitalMapUseCase().collect { mapData ->
                 val allRooms = mapData.floors.flatMap { it.rooms }
                 roomsById = allRooms.associateBy { it.id }
+                if (positioning == null) mapData.positioning?.let(::initPositioning)
                 // Same defaults as the web (DEFAULT_FROM / DEFAULT_TO in app.js)
-                val start = allRooms.find { it.floorId == "tang-2" && it.rawId == 48 } // "Quầy đăng ký khám"
-                val dest = allRooms.find { it.floorId == "tang-3" && it.rawId == 4 }
+                val start = defaultStart()
+                val dest = allRooms.find { it.floorId == DEFAULT_TO_FLOOR && it.rawId == DEFAULT_TO_ID } // "Phòng cách ly"
 
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         hospital = mapData.hospital,
                         floors = mapData.floors,
-                        selectedFloorLevel = null, // open on the 3D overview of all floors
+                        // open in 2D on the start floor, never on the 3D stack (only the 3D button opens it)
+                        selectedFloorLevel = if (it.isLoading) (start?.floorLevel ?: firstMappedLevel(mapData.floors)) else it.selectedFloorLevel,
                         destRoom = dest
                     )
                 }
@@ -324,8 +484,10 @@ class HospitalMapViewModel(
     fun onRouteToSelectedRoom() {
         val room = _uiState.value.selectedRoom ?: return
         goLive()
-        val start = _uiState.value.startRoom
         _uiState.update { it.copy(destRoom = room, selectedRoom = null) }
+        // no start yet: the registration desk, like the web (DEFAULT_FROM), unless that is the destination
+        if (_uiState.value.startRoom == null) defaultStart()?.takeIf { it.id != room.id }?.let(::setStart)
+        val start = _uiState.value.startRoom
         if (start == null || start.id == room.id) onOpenSearch(isStartRoom = true)
         else calculateRoute(focusMapOnRoute = true)
     }
@@ -396,10 +558,18 @@ class HospitalMapViewModel(
         _uiState.update { it.copy(isRouteDetailsExpanded = !it.isRouteDetailsExpanded) }
     }
 
-    /** Tapping a step in the list moves the map to that step's floor (3D for floor changes). */
+    /**
+     * Tapping a step moves the map to that step's floor (2D; a floor change shows the shaft's floor).
+     * During directions it also jumps to that step, like the web.
+     */
     fun onFocusStep(index: Int) {
         val step = _uiState.value.routeSteps.getOrNull(index) ?: return
-        _uiState.update { it.copy(selectedFloorLevel = step.focusFloorLevel) }
+        if (_uiState.value.isNavigating) {
+            _uiState.update { it.copy(navStepIndex = index, selectedFloorLevel = step.focusFloorLevel) }
+            pdrTracker?.goToStep(index)?.let(::applyPdrUpdate)
+        } else {
+            _uiState.update { it.copy(selectedFloorLevel = step.focusFloorLevel) }
+        }
     }
 
     // ---------------------------------------------------------------- turn-by-turn
@@ -409,13 +579,23 @@ class HospitalMapViewModel(
         val route = _uiState.value.currentRoute
         if (steps.isEmpty()) return
         goLive()
-        val initialPdr = route?.let(pdrTracker::initialize)
+        walkedSteps = 0
+        walkedM = 0f
+        offRouteMeters = 0f
+        val p = positioning
+        pdrTracker = if (p != null && route != null && route.segments.isNotEmpty() && route.segments.all { it.points.isNotEmpty() })
+            IndoorPdrTracker(route, p.tracker, ::walkable) else null
+        val initialPdr = pdrTracker?.state()
+        _uiState.update { it.copy(routeCourse = null) }
+        initialPdr?.let(::applyPdrUpdate)
         pressureAtStart = sensorManager?.sensorData?.value?.pressureHpa
 
         _uiState.update {
             it.copy(
                 isNavigating = true,
                 isOffRoute = false,
+                isWalkingBack = false,
+                isFollowing = true,
                 navStepIndex = 0,
                 selectedRoom = null,
                 isRouteDetailsExpanded = false,
@@ -435,7 +615,7 @@ class HospitalMapViewModel(
         }
         val next = s.navStepIndex + 1
         _uiState.update { it.copy(navStepIndex = next, selectedFloorLevel = s.routeSteps[next].focusFloorLevel) }
-        pdrTracker.goToStep(next)?.let(::applyPdrUpdate) // floor change happens only here
+        pdrTracker?.goToStep(next)?.let(::applyPdrUpdate) // floor change happens only here
     }
 
     fun onPreviousStep() {
@@ -443,13 +623,19 @@ class HospitalMapViewModel(
         if (s.navStepIndex <= 0) return
         val prev = s.navStepIndex - 1
         _uiState.update { it.copy(navStepIndex = prev, selectedFloorLevel = s.routeSteps[prev].focusFloorLevel) }
-        pdrTracker.goToStep(prev)?.let(::applyPdrUpdate)
+        pdrTracker?.goToStep(prev)?.let(::applyPdrUpdate)
         if (prev == 0) pressureAtStart = sensorManager?.sensorData?.value?.pressureHpa
     }
 
 
-    fun onToggleAutoRotate() {
-        _uiState.update { it.copy(isAutoRotateEnabled = !it.isAutoRotateEnabled) }
+    /** The user dragged the map during directions: stop following until "recenter" (web: S.follow = false). */
+    fun onUserMovedMap() {
+        if (_uiState.value.isFollowing) _uiState.update { it.copy(isFollowing = false) }
+    }
+
+    /** Recenter during directions: follow the dot again. */
+    fun onResumeFollow() {
+        _uiState.update { it.copy(isFollowing = it.isNavigating) }
     }
 
     fun onStopNavigation() {
@@ -457,8 +643,10 @@ class HospitalMapViewModel(
             it.copy(
                 isNavigating = false,
                 isOffRoute = false,
+                isWalkingBack = false,
                 navStepIndex = 0,
-                isAutoRotateEnabled = false,
+                isFollowing = false,
+                routeCourse = null,
                 hasArrivedAtDestination = false
             )
         }
@@ -470,6 +658,7 @@ class HospitalMapViewModel(
         sensorJob?.cancel()
         sensorManager?.stopTracking()
         liveClient.disconnect()
+        roninClient.close()
     }
 
     /** System back: close the top-most layer first. Returns true if something was closed. */
@@ -480,7 +669,7 @@ class HospitalMapViewModel(
             s.isNavigating -> onStopNavigation()
             s.selectedRoom != null -> onDismissRoomDetails()
             s.isRouteDetailsExpanded -> onToggleRouteDetails()
-            s.selectedFloorLevel != null -> onSelectFloor(null)
+            // never back into the 3D stack on its own (G6): only the 3D button opens it
             else -> return false
         }
         return true
@@ -580,8 +769,14 @@ class HospitalMapViewModel(
         }
     }
 
-    /** Cross-floor routes are shown on the 3D stack; same-floor routes on that floor in 2D. */
-    private fun focusLevelFor(route: HospitalRoute): Int? =
-        if (route.transfer != null) null
-        else route.segments.firstOrNull()?.floorLevel ?: route.startNode.floorLevel
+    /** Every route opens in 2D on the start floor, cross-floor too (G6: no automatic 3D). */
+    private fun focusLevelFor(route: HospitalRoute): Int =
+        route.segments.firstOrNull()?.floorLevel ?: route.startNode.floorLevel
+
+    /** Web DEFAULT_FROM: "Quầy đăng ký khám" (registration desk). */
+    private fun defaultStart(): Room? =
+        _uiState.value.floors.firstOrNull { it.floorId == DEFAULT_FROM_FLOOR }?.rooms?.firstOrNull { it.rawId == DEFAULT_FROM_ID }
+            ?: roomsById["$DEFAULT_FROM_FLOOR:$DEFAULT_FROM_ID"]
+
+    private fun firstMappedLevel(floors: List<Floor>): Int? = (floors.firstOrNull { !it.isTodo } ?: floors.firstOrNull())?.level
 }

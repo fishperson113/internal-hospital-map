@@ -8,6 +8,7 @@ import com.example.hospital.domain.model.HospitalMapData
 import com.example.hospital.domain.model.HospitalRoute
 import com.example.hospital.domain.model.MapNode
 import com.example.hospital.domain.model.Point2D
+import com.example.hospital.domain.model.Positioning
 import com.example.hospital.domain.model.Room
 import com.example.hospital.domain.model.RoomCategory
 import com.example.hospital.domain.model.RouteAssumptions
@@ -272,7 +273,39 @@ class HospitalApiService(
         }
 
         floors.sortBy { it.level }
-        return HospitalMapData(hospital, floors, Graph(emptyMap(), emptyList()))
+        // A missing or malformed block only turns positioning off; the map still loads.
+        val positioning = runCatching { parsePositioning(root.getJSONObject("positioning")) }.getOrNull()
+        return HospitalMapData(hospital, floors, Graph(emptyMap(), emptyList()), positioning)
+    }
+
+    /** `positioning` of GET /api/floors. Key names as in src/backend/positioning.js and pdr.js DEFAULTS. */
+    private fun parsePositioning(p: JSONObject): Positioning {
+        fun JSONObject.f(key: String) = getDouble(key).toFloat()
+        val reroute = p.getJSONObject("reroute")
+        val ronin = p.getJSONObject("ronin")
+        val pdr = p.getJSONObject("pdr")
+        val step = pdr.getJSONObject("step")
+        val learner = pdr.getJSONObject("learner")
+        val fusion = pdr.getJSONObject("fusion")
+        val tracker = pdr.getJSONObject("tracker")
+        return Positioning(
+            planNorthDeg = p.f("plan_north_deg"),
+            stepK = p.f("step_k"),
+            reroute = Positioning.Reroute(reroute.f("every_m"), reroute.getLong("pause_ms"), reroute.getLong("min_gap_ms")),
+            ronin = Positioning.Ronin(ronin.f("chunk_s"), ronin.f("min_speed_mps"), ronin.getInt("warmup_samples")),
+            step = Positioning.StepConfig(step.f("MIN_GAP"), step.f("MAX_GAP"), step.f("MIN_PEAK"), step.f("MIN_LEN"), step.f("MAX_LEN")),
+            learner = Positioning.LearnerConfig(
+                learner.f("MIN_LEG_M"), learner.f("GAIN"), learner.f("MIN_RATIO"), learner.f("MAX_RATIO"), learner.f("MIN_K"), learner.f("MAX_K")
+            ),
+            fusion = Positioning.FusionConfig(
+                fusion.getInt("WARMUP"), fusion.f("COMPASS_GAIN"), fusion.f("GATE_DEG"), fusion.getInt("RELOCK"),
+                fusion.f("ROUTE_GAIN"), fusion.f("ROUTE_GATE_DEG")
+            ),
+            tracker = Positioning.TrackerConfig(
+                tracker.f("AXIS_SNAP_DEG"), tracker.f("MIN_TURN"), tracker.f("TURN_TOL"), tracker.f("SNAP_M"), tracker.f("MERGE_M"),
+                tracker.f("OFF_ROUTE_DEG"), tracker.f("OFF_ROUTE_M"), tracker.f("OVERSHOOT_M"), tracker.f("BACK_DEG")
+            )
+        )
     }
 
     private fun parseRouteJson(
@@ -286,8 +319,16 @@ class HospitalApiService(
         val minutes = root.optInt("minutes", 1)
 
         val assumptionsObj = root.optJSONObject("assumptions")
+        val pxPerM = mutableMapOf<String, Pair<Float, Float>>()
+        assumptionsObj?.optJSONObject("pxPerM")?.let { o ->
+            for (key in o.keys()) {
+                val xy = o.optJSONArray(key) ?: continue
+                pxPerM[key] = xy.getDouble(0).toFloat() to xy.getDouble(1).toFloat()
+            }
+        }
         val assumptions = RouteAssumptions(
             metersPerPx = assumptionsObj?.optDouble("metersPerPx", 0.08) ?: 0.08,
+            pxPerM = pxPerM,
             walkSpeedMps = assumptionsObj?.optDouble("walkSpeedMps", 1.1) ?: 1.1,
             floorChangeSec = assumptionsObj?.optDouble("floorChangeSec", 40.0) ?: 40.0
         )
@@ -383,7 +424,7 @@ class HospitalApiService(
                 )
             )
 
-            // Step 2: Change floor via shaft (focusFloorLevel = null -> 3D view)
+            // Step 2: Change floor via shaft
             steps.add(
                 RouteStep(
                     stepNumber = 2,

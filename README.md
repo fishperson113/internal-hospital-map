@@ -89,7 +89,7 @@ overlap. The new layout follows the pattern of common map apps:
 4. **Bottom:** only one sheet at a time. Priority: navigation → room details → route.
 5. **Search** opens as a full-screen overlay with the keyboard already open.
 6. **System back** closes layers in order: search → navigation → room sheet → expanded
-   list → 2D floor (returns to 3D). See `HospitalMapViewModel.onBack()`.
+   list. It never switches to 3D. See `HospitalMapViewModel.onBack()`.
 
 The measured heights of the top block and bottom sheet are passed to the map as
 `MapViewportInsets`. The camera then fits the plan into the part of the screen that is
@@ -126,8 +126,10 @@ otherwise it is hidden, not overlapped.
 - 2D: drag = pan, pinch = zoom (0.6×–7× of the fitted scale), tap a room = room sheet,
   tap empty space = close the sheet.
 
-During navigation, floor-change steps set `focusFloorLevel = null`, so the map returns
-to the 3D stack and shows the elevator or stairs between the floors.
+No automatic 3D (web rule G6, 3D jumps are jarring): the app opens on the start floor in 2D,
+every route (cross-floor too) is shown on its start floor, and a floor-change step shows
+the floor the user stands on (the elevator/stairs cell). Only the 3D button on `FloorRail`
+or "Xem tất cả tầng" opens the 3D stack.
 
 ## Routing (unchanged except one parameter)
 
@@ -159,7 +161,31 @@ to the 3D stack and shows the elevator or stairs between the floors.
 - **Touch targets:** at least 44 dp.
 - **Test tags:** keep the existing tags (`hospital_map_canvas`, `route_selector_card`,
   `swap_rooms_button`, `btn_navigation_action`, `search_room_input`, `room_item_<id>`,
-  `btn_reset_view`, `btn_toggle_language`). New tags follow the same snake_case style.
+  `btn_reset_view`, `btn_toggle_language`, `btn_positioning_mode`). New tags follow the same snake_case style.
+
+## Indoor positioning (`hospital/sensor/`)
+
+Same algorithm and numbers as the web (`MLAI_Hackathon/src/web/pdr.js`). Every constant comes
+from the server: `GET /api/floors` -> `positioning` (`plan_north_deg`, `step_k`, `reroute`,
+`ronin`, `pdr.step/learner/fusion/tracker`), parsed into `domain/model/Positioning.kt`.
+Nothing is hardcoded: if the server cannot be reached (offline map data) the sensors are
+ignored and the dot stays at the start, like the web.
+
+- **Baseline** (default): `StepDetector` (accelerometer only, like the web; the hardware step
+  counter is shown in the diagnostics panel but never moves the dot) + `HeadingFusion` (gyro + compass, `plan_north_deg`) + `IndoorPdrTracker` (slides the
+  dot along the route, corners, walking back, off-route). `StepLearner` learns the step length
+  at each corner and keeps it in SharedPreferences.
+- **RoNIN**: accelerometer, gyroscope and game rotation at 200 Hz are streamed to
+  `wss://…/api/ronin` (`data/api/RoninClient.kt`); each velocity the server answers becomes one
+  step into the same tracker. North is learned from the compass when the mode is switched on.
+- The map button under "recenter" switches Baseline / RoNIN; the choice is kept.
+- **Directions camera** (web D29): during directions the 2D map follows the dot, zoomed 2.4x,
+  tilted 40°, turned so the route piece under the dot points up (by the route, never by the
+  compass, which shakes indoors), dot at 70% of the free height. A drag lets go; the recenter
+  button turns blue ("Về giữa") and follows again. A pinch while following only changes zoom.
+  The screen stays on during directions.
+- The telemetry line in the navigation sheet (expand it) shows the mode, compass, plan north
+  from the server, steps and the learned step factor `k`.
 
 ## Build / run
 
@@ -172,4 +198,4 @@ configuration. Unit tests: `./gradlew testDebugUnitTest` (Robolectric).
 - The legacy `data/` + `MapRepository` layer ("MapFlow" template) is still wired in DI
   and used by `ExampleRobolectricTest`. It can be removed together with that test.
 - Walking speed (~1.1 m/s) and the 40 s cost of a floor change are rough guesses.
-- No live positioning ("you are here") yet. The start point is chosen by the user.
+- RoNIN mode is not yet tested on a real Android phone (team numbers come from phyphox at 100 Hz).

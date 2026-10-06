@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -72,6 +73,7 @@ import com.example.ui.theme.MapInkSubtle
 import com.example.ui.theme.MapPlateStroke
 import com.example.ui.theme.MapRedAlert
 import com.example.ui.theme.MapSlabSide
+import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
 
@@ -102,7 +104,9 @@ fun HospitalCanvasMap(
     userFloorLevel: Int? = null,
     userHeadingDegrees: Float? = null, // plan heading (0 = up, clockwise); null = dot without arrow
     isNavigating: Boolean = false,
-    isAutoRotateEnabled: Boolean = false,
+    isFollowing: Boolean = false,   // directions camera on (see FOLLOW_*)
+    routeCourse: Float? = null,     // plan direction the camera turns up while following
+    onUserMovedMap: () -> Unit = {}, // a drag while following: stop following
     onRoomClick: (Room) -> Unit,
     onSelectFloor: (Int?) -> Unit,
     onEmptyTap: (Point2D?) -> Unit, // plan point tapped outside rooms (2D), null in 3D
@@ -135,10 +139,18 @@ fun HospitalCanvasMap(
     val latestOnRoomClick by rememberUpdatedState(onRoomClick)
     val latestOnSelectFloor by rememberUpdatedState(onSelectFloor)
     val latestOnEmptyTap by rememberUpdatedState(onEmptyTap)
+    val latestOnUserMovedMap by rememberUpdatedState(onUserMovedMap)
+    val latestUserPosition by rememberUpdatedState(userPosition)
+    val latestUserFloor by rememberUpdatedState(userFloorLevel)
+    val latestCourse by rememberUpdatedState(routeCourse)
+    // follow zoom as a multiple of the floor fit; a pinch while following changes it (web: S.followZoom)
+    var followZoom by remember { mutableFloatStateOf(FOLLOW_ZOOM) }
+    val following = isNavigating && isFollowing && selectedFloorLevel != null
     val insetsReady = viewportInsets.top > 0f
 
     // Camera fit + 3D ↔ 2D transition
-    LaunchedEffect(selectedFloorLevel, recenterRequest, viewSize, sortedFloors, insetsReady) {
+    // isNavigating: leaving directions fits the floor again (tilt back to 0), like the web's go(view)
+    LaunchedEffect(selectedFloorLevel, recenterRequest, viewSize, sortedFloors, insetsReady, isNavigating) {
         if (viewSize.width == 0 || viewSize.height == 0 || sortedFloors.isEmpty()) return@LaunchedEffect
         val w = viewSize.width.toFloat()
         val h = viewSize.height.toFloat()
@@ -201,17 +213,42 @@ fun HospitalCanvasMap(
         label = "pulse_progress"
     )
 
-    // When auto-rotate is enabled during navigation in 2D, turn the map so the user's facing direction points up
-    LaunchedEffect(isAutoRotateEnabled, userHeadingDegrees, selectedFloorLevel, isNavigating, isTransitioning) {
-        val h = userHeadingDegrees
-        if (h != null && isAutoRotateEnabled && isNavigating && selectedFloorLevel != null && !isTransitioning) {
-            val c = camera ?: return@LaunchedEffect
-            val targetSpin = (360f - h) % 360f // MapProjector rotates the plan by +spin: heading h is up at spin = -h
-            var diff = (targetSpin - c.spinDeg) % 360f
-            if (diff > 180f) diff -= 360f
-            if (diff < -180f) diff += 360f
-            if (kotlin.math.abs(diff) > 1.5f) {
-                camera = c.copy(spinDeg = (c.spinDeg + diff * 0.28f + 360f) % 360f)
+    LaunchedEffect(isNavigating) { if (isNavigating) followZoom = FOLLOW_ZOOM }
+
+    // Directions camera (web followStep): each frame the camera eases toward zoomed in, tilted, spun so the
+    // route piece under the dot points up (by the route, not the compass: indoors the compass shakes the map),
+    // and the dot low on the screen so more of the way ahead shows. Nothing jumps.
+    LaunchedEffect(following, selectedFloorLevel) {
+        if (!following) return@LaunchedEffect
+        var last = 0L
+        while (true) {
+            withFrameMillis { now ->
+                val dt = if (last == 0L) 0L else min(100L, now - last)
+                last = now
+                val c = camera
+                val pos = latestUserPosition
+                val course = latestCourse
+                if (c == null || pos == null || course == null || isTransitioning || latestUserFloor != selectedFloorLevel) return@withFrameMillis
+                val w = viewSize.width.toFloat()
+                val h = viewSize.height.toFloat()
+                if (w <= 0f || h <= 0f) return@withFrameMillis
+                val ins = latestInsets
+                val k = 1f - exp(-dt / FOLLOW_MS)
+                val targetScale = fitScale * followZoom
+                val anchor = Offset(ins.start + (w - ins.start - ins.end) / 2f, ins.top + (h - ins.top - ins.bottom) * FOLLOW_DOT_Y)
+                val from = MapProjector(c, planW, planH, w, h).project(pos.x, pos.y, 0f)
+                val s = c.scale + (targetScale - c.scale) * k
+                val tilt = c.tiltDeg + (FOLLOW_TILT - c.tiltDeg) * k
+                val spin = c.spinDeg + wrapDeg(-course - c.spinDeg) * k
+                val to = Offset(from.x + (anchor.x - from.x) * k, from.y + (anchor.y - from.y) * k)
+                // where the dot lands with this tilt/spin at scale 1, no pan, relative to the view centre
+                val v = MapProjector(MapCamera(tilt, spin, 1f, 0f, 0f), planW, planH, w, h).project(pos.x, pos.y, 0f)
+                val vx = v.x - w / 2f
+                val vy = v.y - h / 2f
+                val next = MapCamera(tilt, spin, s, to.x - w / 2f - s * vx, to.y - h / 2f - s * vy)
+                val still = kotlin.math.abs(next.scale - c.scale) < c.scale * 1e-4f && kotlin.math.abs(next.tiltDeg - c.tiltDeg) < 0.02f &&
+                    kotlin.math.abs(wrapDeg(next.spinDeg - c.spinDeg)) < 0.02f && kotlin.math.abs(next.tx - c.tx) < 0.2f && kotlin.math.abs(next.ty - c.ty) < 0.2f
+                if (!still) camera = next
             }
         }
     }
@@ -222,10 +259,18 @@ fun HospitalCanvasMap(
         modifier = modifier
             .fillMaxSize()
             .onSizeChanged { viewSize = it }
-            .pointerInput(is3dView) {
+            .pointerInput(is3dView, following) {
                 detectTransformGestures { centroid, pan, zoom, _ ->
                     val c = camera ?: return@detectTransformGestures
                     if (isTransitioning) return@detectTransformGestures
+                    if (following) {
+                        // following: a pinch only changes the zoom, a drag lets go of the dot (web pointermove)
+                        if (zoom != 1f) {
+                            followZoom = (c.scale * zoom / fitScale).coerceIn(0.6f, 7f)
+                            return@detectTransformGestures
+                        }
+                        latestOnUserMovedMap()
+                    }
                     var next = MapCameraMath.zoomAbout(
                         c, zoom, centroid, size.width.toFloat(), size.height.toFloat(),
                         minScale = fitScale * 0.6f, maxScale = fitScale * 7f
@@ -319,6 +364,20 @@ fun HospitalCanvasMap(
             }
         }
     }
+}
+
+// Directions camera, same numbers as the web (FOLLOW in app.js)
+private const val FOLLOW_TILT = 40f    // degrees
+private const val FOLLOW_ZOOM = 2.4f   // x floor fit
+private const val FOLLOW_DOT_Y = 0.7f  // dot height in the free area (0 top, 1 bottom)
+private const val FOLLOW_MS = 300f     // smoothing time
+
+/** Signed angle in (-180, 180]. */
+private fun wrapDeg(d: Float): Float {
+    var r = d % 360f
+    if (r > 180f) r -= 360f
+    if (r <= -180f) r += 360f
+    return r
 }
 
 // -----------------------------------------------------------------------------

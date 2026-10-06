@@ -36,6 +36,8 @@ data class TransferInfo(
 
 data class RouteAssumptions(
     val metersPerPx: Double = 0.08,
+    /** floorId -> (plan px per metre along x, along y). Plans are not to scale, so the axes differ. */
+    val pxPerM: Map<String, Pair<Float, Float>> = emptyMap(),
     val walkSpeedMps: Double = 1.1,
     val floorChangeSec: Double = 40.0
 )

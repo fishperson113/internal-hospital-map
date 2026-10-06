@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -32,11 +34,11 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.hospital.presentation.ui.components.FloorEmptyCard
 import com.example.hospital.presentation.ui.components.FloorRail
-import com.example.hospital.presentation.ui.components.CompassFab
 import com.example.hospital.presentation.ui.components.HospitalCanvasMap
 import com.example.hospital.presentation.ui.components.IdleSheet
 import com.example.hospital.presentation.ui.components.MapFab
@@ -54,6 +56,7 @@ import com.example.hospital.presentation.util.AppLanguage
 import com.example.hospital.presentation.util.HospitalLocalization
 import com.example.hospital.presentation.viewmodel.HospitalMapViewModel
 import com.example.ui.theme.MapBluePrimary
+import com.example.ui.theme.MapInk
 import com.example.ui.theme.MapCanvasBackground
 
 /**
@@ -107,9 +110,15 @@ fun HospitalMapScreen(
     val currentFloor = ui.floors.find { it.level == ui.selectedFloorLevel }
 
     BackHandler(
-        enabled = ui.isSearchActive || ui.isNavigating || ui.selectedRoom != null ||
-            ui.isRouteDetailsExpanded || ui.selectedFloorLevel != null
+        enabled = ui.isSearchActive || ui.isNavigating || ui.selectedRoom != null || ui.isRouteDetailsExpanded
     ) { viewModel.onBack() }
+
+    // Keep the screen on during directions (web: wake lock); released when directions end
+    val view = LocalView.current
+    DisposableEffect(ui.isNavigating) {
+        view.keepScreenOn = ui.isNavigating
+        onDispose { view.keepScreenOn = false }
+    }
 
     Box(modifier = modifier.fillMaxSize().background(MapCanvasBackground)) {
         val insets = with(density) {
@@ -135,7 +144,9 @@ fun HospitalMapScreen(
             userFloorLevel = ui.userFloorLevel,
             userHeadingDegrees = ui.userPlanHeading,
             isNavigating = ui.isNavigating,
-            isAutoRotateEnabled = ui.isAutoRotateEnabled,
+            isFollowing = ui.isFollowing,
+            routeCourse = ui.routeCourse,
+            onUserMovedMap = viewModel::onUserMovedMap,
             onRoomClick = viewModel::onRoomTapped,
             onSelectFloor = { level -> if (!ui.isNavigating) viewModel.onSelectFloor(level) },
             onEmptyTap = viewModel::onMapEmptyTap,
@@ -217,17 +228,26 @@ fun HospitalMapScreen(
                         language = lang,
                         onSelectFloor = viewModel::onSelectFloor
                     )
-                    CompassFab(
-                        headingDegrees = ui.userHeadingDegrees,
-                        isFollowMode = ui.isAutoRotateEnabled,
-                        onClick = viewModel::onToggleAutoRotate,
-                        language = lang
-                    )
+                    // Directions with the camera let go: blue, "follow me again" (web: #recenter.resume)
+                    val resume = ui.isNavigating && !ui.isFollowing && ui.selectedFloorLevel != null
                     MapFab(
-                        contentDescription = l.t(lang, "Căn giữa bản đồ", "Recenter map"),
-                        icon = Icons.Default.CenterFocusStrong,
-                        onClick = { recenterRequest++ },
+                        contentDescription = if (resume) l.t(lang, "Về giữa", "Re-center") else l.t(lang, "Căn giữa bản đồ", "Recenter map"),
+                        icon = if (resume) Icons.Default.Navigation else Icons.Default.CenterFocusStrong,
+                        tint = if (resume) Color.White else MapInk,
+                        containerColor = if (resume) MapBluePrimary else Color.White,
+                        onClick = {
+                            if (ui.isNavigating && ui.selectedFloorLevel != null) viewModel.onResumeFollow() else recenterRequest++
+                        },
                         testTag = "btn_reset_view"
+                    )
+                    // Positioning mode (web: #mode-btn): RoNIN = blue with white text
+                    MapFab(
+                        contentDescription = l.t(lang, "Đổi cách định vị", "Switch positioning mode"),
+                        text = if (ui.isRoninMode) "RoNIN" else "Baseline",
+                        containerColor = if (ui.isRoninMode) MapBluePrimary else Color.White,
+                        textColor = if (ui.isRoninMode) Color.White else MapBluePrimary,
+                        onClick = viewModel::onTogglePositioningMode,
+                        testTag = "btn_positioning_mode"
                     )
                     MapFab(
                         contentDescription = l.t(lang, "Đổi ngôn ngữ", "Switch language"),
@@ -256,6 +276,7 @@ fun HospitalMapScreen(
                     diagnostics = ui.sensorDiagnostics,
                     floorChangeSuggested = ui.floorChangeSuggested,
                     offRoute = ui.isOffRoute,
+                    walkingBack = ui.isWalkingBack,
                     hasArrived = ui.hasArrivedAtDestination,
                     onPrevious = viewModel::onPreviousStep,
                     onNext = viewModel::onNextStep,

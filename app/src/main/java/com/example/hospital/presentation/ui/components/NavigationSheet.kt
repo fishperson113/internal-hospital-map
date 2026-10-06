@@ -93,6 +93,7 @@ fun NavigationSheet(
     diagnostics: String = "",           // shown when the telemetry badge is tapped (on-site tuning)
     floorChangeSuggested: Boolean = false,
     offRoute: Boolean = false,
+    walkingBack: Boolean = false,
     hasArrived: Boolean = false,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -140,6 +141,15 @@ fun NavigationSheet(
                     "You left the route; finding a new one from where you are. Tap where you stand on the map if the dot is off."),
                 fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MapRedOnContainer, lineHeight = 18.sp,
                 modifier = Modifier.testTag("off_route_hint")
+            )
+        }
+
+        if (walkingBack) {
+            Text(
+                l.t(language, "Bạn đang đi ngược chiều. Quay lại theo đường màu xanh để tới nơi.",
+                    "You are walking the wrong way. Turn around and follow the blue line."),
+                fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MapRedOnContainer, lineHeight = 18.sp,
+                modifier = Modifier.testTag("walking_back_hint")
             )
         }
 
@@ -197,7 +207,7 @@ fun NavigationSheet(
             if (telemetryText.isNotBlank()) {
                 // Sensor line; tap for the raw counters (on-site tuning)
                 Text(
-                    "📡 $telemetryText", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Color(0xFF475569),
+                    telemetryText, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Color(0xFF475569),
                     modifier = Modifier.clickable { showDiag = !showDiag }
                 )
                 if (showDiag && diagnostics.isNotBlank()) {

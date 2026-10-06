@@ -43,7 +43,7 @@ object RouteStepFormatter {
                         title = l.t(lang, "${if (up) "Lên" else "Xuống"} $target", "${if (up) "Go up" else "Go down"} to $target"),
                         subtitle = l.t(lang, "Bằng $shaft", "Via $shaft"),
                         chipLabel = shaft,
-                        focusFloorLevel = null,
+                        focusFloorLevel = s.floorLevel, // the floor the user stands on (the shaft), not 3D
                         distanceMeters = 0f,
                         isTransfer = true
                     )
