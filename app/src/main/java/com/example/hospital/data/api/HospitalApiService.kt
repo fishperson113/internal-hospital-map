@@ -133,6 +133,7 @@ class HospitalApiService(
             val level = fObj.getInt("level")
             val name = fObj.getString("name")
             val nameEn = fObj.optString("name_en", "Floor $level")
+            val shortName = fObj.optString("short", level.toString())
 
             if (fObj.isNull("data")) {
                 floors.add(
@@ -144,7 +145,8 @@ class HospitalApiService(
                         floorId = floorId,
                         width = 1795f,
                         height = 734f,
-                        isTodo = true
+                        isTodo = true,
+                        shortName = shortName
                     )
                 )
             } else {
@@ -266,7 +268,8 @@ class HospitalApiService(
                         height = height,
                         isTodo = false,
                         labels = labels,
-                        frame = frameList
+                        frame = frameList,
+                        shortName = shortName
                     )
                 )
             }

@@ -74,7 +74,9 @@ data class Floor(
     val isTodo: Boolean = false,
     val labels: List<FloorLabel> = emptyList(),
     val links: List<String> = emptyList(),
-    val frame: List<Float> = emptyList()
+    val frame: List<Float> = emptyList(),
+    /** Short button label from the server (`short`: "B1", "2"); levels can be negative (B1 = -1). */
+    val shortName: String = level.toString()
 )
 
 data class MapNode(

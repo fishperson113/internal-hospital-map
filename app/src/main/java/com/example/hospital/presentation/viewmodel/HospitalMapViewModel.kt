@@ -298,6 +298,7 @@ class HospitalMapViewModel(
     companion object {
         const val FLOOR_HINT_HPA = 0.3f // calibration knob: pressure change per floor that triggers the hint
         private const val PREFS_NAME = "hospital_pdr_prefs"
+        private const val MAX_RESULTS = 60 // web: search shows at most 60 rows
         private const val KEY_STEP_K = "step_k"     // learned step length factor (web: localStorage.stepK)
         private const val KEY_POS_MODE = "pos_mode" // web: localStorage.posMode
         private const val MODE_RONIN = "ronin"
@@ -683,22 +684,35 @@ class HospitalMapViewModel(
                 isSearchActive = true,
                 isSelectingStartRoom = isStartRoom,
                 searchQuery = "",
-                searchResults = searchLocal("")
+                searchFloorId = null, // opening the search always starts on "all floors" (web)
+                searchResults = searchLocal("", null)
             )
         }
     }
 
     fun onSearchQueryChanged(query: String) {
-        val local = searchLocal(query)
+        val floorId = _uiState.value.searchFloorId
+        val local = searchLocal(query, floorId)
         _uiState.update { it.copy(searchQuery = query, searchResults = local) }
         searchJob?.cancel()
         if (local.isEmpty() && query.isNotBlank()) {
             // fall back to the repository search (e.g. room codes)
             searchJob = viewModelScope.launch {
-                val results = searchRoomsUseCase(query)
-                _uiState.update { if (it.searchQuery == query) it.copy(searchResults = results) else it }
+                val results = searchRoomsUseCase(query).filter { floorId == null || it.floorId == floorId }.take(MAX_RESULTS)
+                _uiState.update { if (it.searchQuery == query && it.searchFloorId == floorId) it.copy(searchResults = results) else it }
             }
         }
+    }
+
+    /** Floor chip in the search (null = all floors); combines with the query. */
+    fun onSearchFloorSelected(floorId: String?) {
+        _uiState.update { it.copy(searchFloorId = floorId) }
+        onSearchQueryChanged(_uiState.value.searchQuery)
+    }
+
+    /** Enter in the search box picks the first result (web). */
+    fun onSearchSubmit() {
+        _uiState.value.searchResults.firstOrNull()?.let(::onSearchResultPicked)
     }
 
     fun onSearchResultPicked(room: Room) {
@@ -710,13 +724,14 @@ class HospitalMapViewModel(
     }
 
     /** Accent-insensitive search over VI + EN names ("phong kham" matches "PHÒNG KHÁM"). */
-    private fun searchLocal(query: String): List<Room> {
-        val all = _uiState.value.floors.flatMap { it.rooms }
+    private fun searchLocal(query: String, floorId: String?): List<Room> {
+        val all = _uiState.value.floors.filter { floorId == null || it.floorId == floorId }.flatMap { it.rooms }
             .filter { it.name.isNotBlank() && !it.name.all(Char::isDigit) }
         val q = normalize(query).trim()
-        if (q.isEmpty()) return all.filter { it.kind == null }.sortedBy { it.floorLevel }
+        if (q.isEmpty()) return all.filter { it.kind == null }.sortedBy { it.floorLevel }.take(MAX_RESULTS)
         return all.filter { normalize(it.name).contains(q) || normalize(it.nameEn).contains(q) }
             .sortedWith(compareByDescending<Room> { normalize(it.name).startsWith(q) }.thenBy { it.floorLevel })
+            .take(MAX_RESULTS)
     }
 
     private fun normalize(s: String): String =

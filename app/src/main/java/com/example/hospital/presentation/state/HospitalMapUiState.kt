@@ -54,6 +54,7 @@ data class HospitalMapUiState(
     val searchResults: List<Room> = emptyList(),
     val isSearchActive: Boolean = false,
     val isSelectingStartRoom: Boolean = false,
+    val searchFloorId: String? = null, // floor filter chip in the search; null = all floors
 
     // Turn-by-turn navigation
     val isNavigating: Boolean = false,

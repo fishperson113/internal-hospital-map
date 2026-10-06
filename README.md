@@ -161,7 +161,15 @@ or "Xem tất cả tầng" opens the 3D stack.
 - **Touch targets:** at least 44 dp.
 - **Test tags:** keep the existing tags (`hospital_map_canvas`, `route_selector_card`,
   `swap_rooms_button`, `btn_navigation_action`, `search_room_input`, `room_item_<id>`,
-  `btn_reset_view`, `btn_toggle_language`, `btn_positioning_mode`). New tags follow the same snake_case style.
+  `btn_reset_view`, `btn_toggle_language`, `btn_positioning_mode`, `sheet_handle`,
+  `sheet_hide_toggle`, `search_floor_all`, `search_floor_<floorId>`).
+- **Bottom sheets** (`MapBottomSheetContainer`): swipe the handle down or tap the chevron to hide
+  the sheet completely (only a thin handle strip stays); swipe up or tap to show it again. A new
+  room or a new route shows it again.
+- **"Tôi bị lạc"** in the route and navigation sheets shows only when the sheet is expanded
+  (list button or tap the handle), or while a help request is active.
+- **Search floor filter** (web C4b): chips "Tất cả tầng" + one per mapped floor (`short` from the
+  server: B1, 1, 2…), combined with the query; at most 60 results; Enter picks the first one. New tags follow the same snake_case style.
 
 ## Indoor positioning (`hospital/sensor/`)
 

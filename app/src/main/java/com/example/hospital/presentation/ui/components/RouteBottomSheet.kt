@@ -100,7 +100,7 @@ fun RouteBottomSheet(
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
-    MapBottomSheetContainer(modifier = modifier.testTag("route_bottom_sheet"), onHandleClick = onToggleExpand) {
+    MapBottomSheetContainer(modifier = modifier.testTag("route_bottom_sheet"), onHandleClick = onToggleExpand, hideResetKey = route?.let { "${it.startNode.x},${it.startNode.y}>${it.destNode.x},${it.destNode.y}" }) {
         when {
             isCalculating && route == null -> Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -200,8 +200,10 @@ fun RouteBottomSheet(
 
             }
         }
-        // Web: "Tôi bị lạc" whenever there is a start place, also while loading or on a route error.
-        if (onAskHelp != null) {
+        // "Tôi bị lạc": only in the expanded sheet (like NavigationSheet) to keep the sheet small;
+        // an active request stays visible. Expand with the list button or by tapping the handle.
+        val helpActive = helpStatus != null && helpStatus != "done" && helpStatus != "resolved"
+        if (onAskHelp != null && (isExpanded || helpActive)) {
             HelpAssistanceCard(
                 helpStatus = helpStatus,
                 language = language,

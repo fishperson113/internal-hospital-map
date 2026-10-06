@@ -59,7 +59,7 @@ fun RoomDetailSheet(
 ) {
     val l = HospitalLocalization
     val spot = room.isSpot
-    MapBottomSheetContainer(modifier = modifier.testTag("room_detail_sheet")) {
+    MapBottomSheetContainer(modifier = modifier.testTag("room_detail_sheet"), hideResetKey = room.id) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(
                 Modifier

@@ -328,6 +328,10 @@ fun HospitalMapScreen(
                 query = ui.searchQuery,
                 rooms = ui.searchResults,
                 language = lang,
+                floors = ui.floors.filter { !it.isTodo },
+                selectedFloorId = ui.searchFloorId,
+                onSelectFloor = viewModel::onSearchFloorSelected,
+                onSubmit = viewModel::onSearchSubmit,
                 onQueryChange = viewModel::onSearchQueryChanged,
                 onSelectRoom = viewModel::onSearchResultPicked,
                 onDismiss = viewModel::onCloseSearch

@@ -7,6 +7,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,6 +22,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -47,9 +51,11 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.hospital.domain.model.Floor
 import com.example.hospital.domain.model.Room
 import com.example.hospital.presentation.util.AppLanguage
 import com.example.hospital.presentation.util.HospitalLocalization
@@ -64,12 +70,17 @@ import com.example.ui.theme.MapInkMuted
  * Full-screen search (replaces the old ModalBottomSheet, which left too little room for
  * results once the keyboard opened on a phone). Keyboard opens immediately.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RoomSearchDialog(
     isSelectingStart: Boolean,
     query: String,
     rooms: List<Room>,
     language: AppLanguage = AppLanguage.VIETNAMESE,
+    floors: List<Floor> = emptyList(),      // floors with a map, for the filter chips
+    selectedFloorId: String? = null,        // null = all floors
+    onSelectFloor: (String?) -> Unit = {},
+    onSubmit: () -> Unit = {},              // Enter picks the first result
     onQueryChange: (String) -> Unit,
     onSelectRoom: (Room) -> Unit,
     onDismiss: () -> Unit
@@ -103,6 +114,8 @@ fun RoomSearchDialog(
                         singleLine = true,
                         textStyle = TextStyle(fontSize = 16.sp, color = MapInk),
                         cursorBrush = SolidColor(MapBluePrimary),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
                         modifier = Modifier.weight(1f).focusRequester(focusRequester).testTag("search_room_input"),
                         decorationBox = { inner ->
                             Box(contentAlignment = Alignment.CenterStart) {
@@ -157,9 +170,29 @@ fun RoomSearchDialog(
                 }
             }
 
+            // Floor filter (web C4b): "Tất cả tầng" then one chip per mapped floor, wraps when out of room
+            if (floors.size > 1) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FloorChip(l.t(language, "Tất cả tầng", "All floors"), selectedFloorId == null, "search_floor_all") { onSelectFloor(null) }
+                    floors.sortedBy { it.level }.forEach { f ->
+                        FloorChip(f.shortName, selectedFloorId == f.floorId, "search_floor_${f.floorId}") { onSelectFloor(f.floorId) }
+                    }
+                }
+            }
+
+            val floorName = floors.firstOrNull { it.floorId == selectedFloorId }?.let {
+                if (language == AppLanguage.ENGLISH) it.description.ifBlank { it.name } else it.name
+            }
             Text(
-                text = if (query.isBlank()) l.t(language, "TẤT CẢ PHÒNG & KHOA", "ALL ROOMS & DEPARTMENTS")
-                else l.t(language, "${rooms.size} KẾT QUẢ", "${rooms.size} RESULTS"),
+                text = when {
+                    floorName != null -> l.t(language, "$floorName · ${rooms.size} kết quả", "$floorName · ${rooms.size} results")
+                    query.isBlank() -> l.t(language, "TẤT CẢ PHÒNG & KHOA", "ALL ROOMS & DEPARTMENTS")
+                    else -> l.t(language, "${rooms.size} KẾT QUẢ", "${rooms.size} RESULTS")
+                },
                 fontSize = 12.sp, fontWeight = FontWeight.Medium, color = MapInkMuted, letterSpacing = 0.3.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )
@@ -175,6 +208,21 @@ fun RoomSearchDialog(
                     RoomResultRow(room = room, language = language, onClick = { onSelectRoom(room) })
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun FloorChip(label: String, selected: Boolean, tag: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) MapBluePrimary else Color.White,
+        border = BorderStroke(1.dp, if (selected) MapBluePrimary else MapDivider),
+        modifier = Modifier.testTag(tag)
+    ) {
+        Box(Modifier.height(32.dp).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+            Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = if (selected) Color.White else Color(0xFF3C4043))
         }
     }
 }

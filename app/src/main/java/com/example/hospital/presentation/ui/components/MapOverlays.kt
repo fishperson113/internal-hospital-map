@@ -1,7 +1,9 @@
 package com.example.hospital.presentation.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,12 +20,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Construction
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -183,15 +192,21 @@ fun FloorEmptyCard(
 /**
  * Bottom sheet container used by the route / room / navigation sheets.
  * Not a ModalBottomSheet on purpose: the map must stay interactive behind it.
+ *
+ * The user can hide it completely to see the map: swipe the handle down (or tap the chevron);
+ * only a thin handle strip stays at the bottom edge, swipe it up or tap it to bring the sheet back.
+ * Tapping the handle of a shown sheet keeps doing [onHandleClick] (expand / collapse details).
  */
 @Composable
 fun MapBottomSheetContainer(
     modifier: Modifier = Modifier,
     onHandleClick: (() -> Unit)? = null,
+    hideResetKey: String? = null, // a new value shows the sheet again (e.g. another room tapped)
     content: @Composable ColumnScope.() -> Unit
 ) {
+    var hidden by rememberSaveable(hideResetKey) { mutableStateOf(false) }
     Surface(
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
         color = Color.White,
         shadowElevation = 8.dp,
         modifier = modifier.fillMaxWidth()
@@ -199,19 +214,39 @@ fun MapBottomSheetContainer(
         Column(
             modifier = Modifier
                 .navigationBarsPadding()
-                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(start = 16.dp, end = 16.dp, bottom = if (hidden) 0.dp else 12.dp)
+                .animateContentSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(22.dp)
-                    .then(if (onHandleClick != null) Modifier.clickable(onClick = onHandleClick) else Modifier),
+                    .height(28.dp)
+                    .pointerInput(Unit) {
+                        var dy = 0f
+                        detectVerticalDragGestures(
+                            onDragStart = { dy = 0f },
+                            onDragEnd = { if (dy > 24f) hidden = true else if (dy < -24f) hidden = false }
+                        ) { _, amount -> dy += amount }
+                    }
+                    .clickable { if (hidden) hidden = false else onHandleClick?.invoke() }
+                    .testTag("sheet_handle"),
                 contentAlignment = Alignment.Center
             ) {
-                Box(Modifier.width(32.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MapDivider))
+                Box(Modifier.width(36.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(MapDivider))
+                Icon(
+                    if (hidden) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = "Ẩn hoặc hiện bảng", // the container has no language; screen readers get the VI text
+                    tint = MapInkSubtle,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable { hidden = !hidden }
+                        .testTag("sheet_hide_toggle")
+                )
             }
-            content()
+            if (!hidden) content()
         }
     }
 }
