@@ -3,6 +3,7 @@ package com.example.hospital.domain.pathfinding
 import com.example.hospital.domain.model.Floor
 import com.example.hospital.domain.model.Point2D
 import com.example.hospital.domain.model.Room
+import com.example.hospital.domain.model.isSpot
 import java.util.PriorityQueue
 import kotlin.math.*
 
@@ -25,6 +26,10 @@ object GridAStarPathfinder {
     const val MIN_PASSAGE = 20f
 
     private val gridCache = mutableMapOf<Int, NavigationGrid>()
+    private val shaperCache = mutableMapOf<String, PathShaper>()
+
+    private fun shaperOf(floor: Floor, radiusM: Float) =
+        shaperCache.getOrPut("${floor.level}:$radiusM") { PathShaper(floor, getOrBuildGrid(floor), radiusM) }
 
     fun getOrBuildGrid(floor: Floor): NavigationGrid {
         gridCache[floor.level]?.let { return it }
@@ -174,10 +179,21 @@ object GridAStarPathfinder {
         }
     }
 
+    /** A tapped spot (no polygon): the line starts / ends exactly there, like the backend. */
+    private fun spotOf(room: Room): Point2D? = room.labelAt?.takeIf { room.isSpot && room.polygon.isEmpty() }
+
     private fun roomCells(floor: Floor, room: Room, reach: Float): List<Int> {
         val g = getOrBuildGrid(floor)
         val key = "${room.id}:$reach"
         g.ringCache[key]?.let { return it }
+        spotOf(room)?.let { p -> // free cells within reach of the spot
+            val lim = reach + CELL_SIZE
+            val cells = (0 until g.gw * g.gh).filter {
+                !g.blocked[it] && hypot((it % g.gw) * CELL_SIZE + CELL_SIZE / 2f - p.x, (it / g.gw) * CELL_SIZE + CELL_SIZE / 2f - p.y) <= lim
+            }
+            g.ringCache[key] = cells
+            return cells
+        }
 
         val poly = room.polygon
         var minX = Float.MAX_VALUE
@@ -219,7 +235,8 @@ object GridAStarPathfinder {
         val reach: Float
     )
 
-    fun findPathOnFloor(floor: Floor, startRoom: Room, destRoom: Room): FloorPathResult? {
+    /** [radiusM]: how far the drawn line keeps from walls (a person's radius), see [PathShaper]. */
+    fun findPathOnFloor(floor: Floor, startRoom: Room, destRoom: Room, radiusM: Float = PathShaper.RADIUS_M): FloorPathResult? {
         val g = getOrBuildGrid(floor)
         for (reach in REACH_STEPS) {
             val starts = roomCells(floor, startRoom, reach)
@@ -227,9 +244,10 @@ object GridAStarPathfinder {
             if (starts.isEmpty() || goals.isEmpty()) continue
 
             val rawCells = astar(g, starts, goals) ?: continue
-            val smoothed = smooth(g, rawCells)
-            val len = polyLength(smoothed)
-            return FloorPathResult(smoothed, len, reach)
+            val pts = shaperOf(floor, radiusM).shape(rawCells.map {
+                Point2D((it % g.gw) * CELL_SIZE + CELL_SIZE / 2f, (it / g.gw) * CELL_SIZE + CELL_SIZE / 2f)
+            }, spotOf(startRoom), spotOf(destRoom))
+            return FloorPathResult(pts, polyLength(pts), reach)
         }
         return buildCorridorFallback(floor, startRoom, destRoom)
     }
@@ -350,44 +368,6 @@ object GridAStarPathfinder {
             }
         }
         return null
-    }
-
-    private fun clearLine(g: NavigationGrid, ax: Int, ay: Int, bx: Int, by: Int): Boolean {
-        val dx = (bx - ax).toFloat()
-        val dy = (by - ay).toFloat()
-        val steps = max(1, ceil(hypot(dx, dy) * 2f).toInt())
-        val gw = g.gw
-        val gh = g.gh
-        for (k in 0..steps) {
-            val cx = round(ax + dx * k / steps).toInt()
-            val cy = round(ay + dy * k / steps).toInt()
-            if (cx !in 0 until gw || cy !in 0 until gh) return false
-            if (g.blocked[cy * gw + cx]) return false
-        }
-        return true
-    }
-
-    private fun smooth(g: NavigationGrid, cells: List<Int>): List<Point2D> {
-        if (cells.size <= 2) {
-            return cells.map { Point2D((it % g.gw) * CELL_SIZE + CELL_SIZE / 2f, (it / g.gw) * CELL_SIZE + CELL_SIZE / 2f) }
-        }
-
-        val gw = g.gw
-        val pts = cells.map { Pair(it % gw, it / gw) }
-        val out = mutableListOf<Pair<Int, Int>>()
-        out.add(pts[0])
-
-        var k = 0
-        while (k < pts.size - 1) {
-            var j = pts.size - 1
-            while (j > k + 1 && !clearLine(g, pts[k].first, pts[k].second, pts[j].first, pts[j].second)) {
-                j--
-            }
-            out.add(pts[j])
-            k = j
-        }
-
-        return out.map { Point2D(it.first * CELL_SIZE + CELL_SIZE / 2f, it.second * CELL_SIZE + CELL_SIZE / 2f) }
     }
 
     fun polyLength(points: List<Point2D>): Float {
