@@ -16,6 +16,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -105,6 +107,8 @@ fun NavigationSheet(
     destLabel: String = "",
     onChangeStart: () -> Unit = {},
     onChangeDest: () -> Unit = {},
+    voiceOn: Boolean = true,            // speaker button: voice guidance + vibration
+    onToggleVoice: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -125,6 +129,18 @@ fun NavigationSheet(
                     if (hasArrived) l.t(language, "Hoàn tất lộ trình", "Route completed")
                     else l.t(language, "Còn ~$min phút", "~$min min left"),
                     fontSize = 18.sp, fontWeight = FontWeight.Medium, color = MapGreenSuccess
+                )
+            }
+            OutlinedIconButton(
+                onClick = onToggleVoice,
+                modifier = Modifier.padding(end = 8.dp).size(40.dp).testTag("btn_voice"),
+                border = BorderStroke(1.dp, MapDivider)
+            ) {
+                Icon(
+                    if (voiceOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                    contentDescription = if (voiceOn) l.t(language, "Tắt hướng dẫn bằng giọng nói", "Turn voice guidance off")
+                    else l.t(language, "Bật hướng dẫn bằng giọng nói", "Turn voice guidance on"),
+                    tint = if (voiceOn) MapBluePrimary else MapInkMuted
                 )
             }
             TextButton(

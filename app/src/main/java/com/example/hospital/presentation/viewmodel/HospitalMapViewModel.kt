@@ -24,6 +24,9 @@ import com.example.hospital.sensor.IndoorPdrTracker
 import com.example.hospital.sensor.StepLearner
 import com.example.hospital.sensor.norm
 import com.example.hospital.sensor.wrap
+import com.example.hospital.voice.Cue
+import com.example.hospital.voice.VoiceCueDetector
+import com.example.hospital.voice.VoicePlayer
 import android.content.Context
 import com.example.hospital.presentation.util.RouteStepFormatter
 import kotlinx.coroutines.Dispatchers
@@ -94,13 +97,17 @@ class HospitalMapViewModel(
     private var offRouteMeters = 0f // walked off route since the last re-route
     private var lastRerouteMs = 0L
     private var pressureAtStart: Float? = null // barometer when the walk on the start floor began
+    // Voice guidance: the detector picks the cue from the tracker state, the player says it (no context in tests).
+    private val voice = sensorManager?.context?.let { runCatching { VoicePlayer(it) }.getOrNull() }
+    private val cues = VoiceCueDetector()
+    private var rerouting = false // the next route comes from maybeReroute: say "new route", not "start"
     private var live = false // like the web: the CRM sees the user once they pick a place / start / ask help
     private val liveClient = com.example.hospital.data.api.LiveClient(context = sensorManager?.context) { status ->
         _uiState.update { it.copy(helpStatus = status) }
     }
 
     init {
-        _uiState.update { it.copy(isRoninMode = roninOn) }
+        _uiState.update { it.copy(isRoninMode = roninOn, isVoiceOn = prefs?.getBoolean(KEY_VOICE, true) ?: true) }
         sensorManager?.setRoninMode(roninOn)
         if (roninOn) roninClient.connect()
         loadMapData()
@@ -302,6 +309,7 @@ class HospitalMapViewModel(
         private const val KEY_STEP_K = "step_k"     // learned step length factor (web: localStorage.stepK)
         private const val KEY_POS_MODE = "pos_mode" // web: localStorage.posMode
         private const val MODE_RONIN = "ronin"
+        private const val KEY_VOICE = "voice_on"
         private const val MODE_BASELINE = "baseline"
         // web app.js DEFAULT_FROM / DEFAULT_TO
         private const val DEFAULT_FROM_FLOOR = "tang-2"
@@ -323,6 +331,28 @@ class HospitalMapViewModel(
                 routeCourse = pdrTracker?.courseHeading() ?: it.routeCourse
             )
         }
+        if (_uiState.value.isNavigating) cues.onState(pdr, endCue(pdr.segmentIndex), SystemClock.elapsedRealtime())?.let(::say)
+    }
+
+    /** What to say near the end of route segment [segment]: "almost there", or which shaft to take. */
+    private fun endCue(segment: Int): Cue? {
+        val r = _uiState.value.currentRoute ?: return null
+        if (segment >= r.segments.lastIndex) return Cue.ARRIVING
+        val t = r.transfer ?: return null
+        val up = r.segments[segment + 1].floorLevel > r.segments[segment].floorLevel
+        return if (t.kind.startsWith("stair")) (if (up) Cue.STAIRS_UP else Cue.STAIRS_DOWN)
+        else if (up) Cue.ELEVATOR_UP else Cue.ELEVATOR_DOWN
+    }
+
+    private fun say(cue: Cue) {
+        if (_uiState.value.isVoiceOn) voice?.play(cue, _uiState.value.language)
+    }
+
+    /** Speaker button: voice guidance (and its vibration) on / off, remembered on this phone. */
+    fun onToggleVoice() {
+        val on = !_uiState.value.isVoiceOn
+        _uiState.update { it.copy(isVoiceOn = on) }
+        prefs?.edit()?.putBoolean(KEY_VOICE, on)?.apply()
     }
 
     /** Corridor test for free walking: inside the floor plan and not inside any room. */
@@ -344,6 +374,7 @@ class HospitalMapViewModel(
         val floor = s.floors.find { it.level == s.userFloorLevel } ?: return
         lastRerouteMs = now
         offRouteMeters = 0f
+        rerouting = true
         onSelectStartRoom(spotRoom(floor, pos))
     }
 
@@ -567,6 +598,7 @@ class HospitalMapViewModel(
         val step = _uiState.value.routeSteps.getOrNull(index) ?: return
         if (_uiState.value.isNavigating) {
             _uiState.update { it.copy(navStepIndex = index, selectedFloorLevel = step.focusFloorLevel) }
+            cues.reset(SystemClock.elapsedRealtime())
             pdrTracker?.goToStep(index)?.let(::applyPdrUpdate)
         } else {
             _uiState.update { it.copy(selectedFloorLevel = step.focusFloorLevel) }
@@ -606,6 +638,12 @@ class HospitalMapViewModel(
                 hasArrivedAtDestination = false
             )
         }
+        val now = SystemClock.elapsedRealtime()
+        val cue = if (rerouting) Cue.REROUTED else Cue.START
+        rerouting = false
+        cues.reset(now)
+        cues.said(cue, now)
+        say(cue)
     }
 
     fun onNextStep() {
@@ -616,6 +654,7 @@ class HospitalMapViewModel(
         }
         val next = s.navStepIndex + 1
         _uiState.update { it.copy(navStepIndex = next, selectedFloorLevel = s.routeSteps[next].focusFloorLevel) }
+        cues.reset(SystemClock.elapsedRealtime())
         pdrTracker?.goToStep(next)?.let(::applyPdrUpdate) // floor change happens only here
     }
 
@@ -624,6 +663,7 @@ class HospitalMapViewModel(
         if (s.navStepIndex <= 0) return
         val prev = s.navStepIndex - 1
         _uiState.update { it.copy(navStepIndex = prev, selectedFloorLevel = s.routeSteps[prev].focusFloorLevel) }
+        cues.reset(SystemClock.elapsedRealtime())
         pdrTracker?.goToStep(prev)?.let(::applyPdrUpdate)
         if (prev == 0) pressureAtStart = sensorManager?.sensorData?.value?.pressureHpa
     }
@@ -660,6 +700,7 @@ class HospitalMapViewModel(
         sensorManager?.stopTracking()
         liveClient.disconnect()
         roninClient.close()
+        voice?.release()
     }
 
     /** System back: close the top-most layer first. Returns true if something was closed. */

@@ -77,6 +77,7 @@ data class HospitalMapUiState(
     val isOffRoute: Boolean = false, // walked away from the line: re-routing from the dot, tap the map to correct
     val isWalkingBack: Boolean = false, // walking back the way the user came: the dot slides back along the route
     val isRoninMode: Boolean = false,   // positioning mode: false = Baseline (steps + gyro/compass), true = RoNIN (server)
+    val isVoiceOn: Boolean = true,      // voice guidance + vibration during directions (speaker button)
 
     // CRM WebSocket live assistance ("Tôi bị lạc")
     val helpStatus: String? = null,

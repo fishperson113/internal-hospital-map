@@ -286,7 +286,9 @@ fun HospitalMapScreen(
                     startLabel = ui.startRoom?.let { l.roomLabel(it, lang) }.orEmpty(),
                     destLabel = ui.destRoom?.let { l.roomLabel(it, lang) }.orEmpty(),
                     onChangeStart = { viewModel.onOpenSearch(isStartRoom = true) },
-                    onChangeDest = { viewModel.onOpenSearch(isStartRoom = false) }
+                    onChangeDest = { viewModel.onOpenSearch(isStartRoom = false) },
+                    voiceOn = ui.isVoiceOn,
+                    onToggleVoice = viewModel::onToggleVoice
                 )
                 selected != null -> RoomDetailSheet(
                     room = selected,

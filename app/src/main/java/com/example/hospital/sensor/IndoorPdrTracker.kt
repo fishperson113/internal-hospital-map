@@ -18,7 +18,13 @@ data class IndoorPdrState(
     val segmentIndex: Int = 0,
     val hasArrived: Boolean = false,
     val offRoute: Boolean = false, // walking freely: the caller re-routes from [position]
-    val backward: Boolean = false  // walking back the way the user came: the dot slides back
+    val backward: Boolean = false, // walking back the way the user came: the dot slides back
+    // Voice guidance (null off the route or at a shaft): the next turn and how far it is, how far the end of this
+    // segment is. turnIndex counts the turns of this segment, so a cue is said once per turn.
+    val turnIndex: Int = 0,
+    val nextTurnDeg: Float? = null, // clockwise > 0 = right
+    val metersToTurn: Float? = null,
+    val metersToEnd: Float? = null
 )
 
 /** A leg closed at a corner: its real length on the route and the length counted from steps. */
@@ -195,7 +201,13 @@ class IndoorPdrTracker(
     fun state(): IndoorPdrState {
         free?.let { return IndoorPdrState(it, seg.floorLevel, segment, offRoute = true) }
         val (p, atEnd) = pointAlong(pts, walkedPx)
-        return IndoorPdrState(p, seg.floorLevel, segment, hasArrived = atEnd && segment == segs.lastIndex, backward = backward)
+        val onLine = walking && walkedPx.isFinite()
+        val c = corners.getOrNull(nextCorner)?.takeIf { onLine }
+        return IndoorPdrState(
+            p, seg.floorLevel, segment, hasArrived = atEnd && segment == segs.lastIndex, backward = backward,
+            turnIndex = nextCorner, nextTurnDeg = c?.turnDeg, metersToTurn = c?.let { metersAlong(walkedPx, it.distPx) },
+            metersToEnd = if (onLine) metersAlong(walkedPx, Float.POSITIVE_INFINITY) else null
+        )
     }
 
     /** Direction of the route line under the dot while walking on it (pulls the heading to the route); else null. */
