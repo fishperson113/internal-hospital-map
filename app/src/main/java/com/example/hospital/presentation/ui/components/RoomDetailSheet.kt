@@ -55,6 +55,8 @@ fun RoomDetailSheet(
     onRouteFrom: () -> Unit,
     helpStatus: String? = null,
     onAskHelp: (() -> Unit)? = null, // web shows "Tôi bị lạc" under the room card too
+    ticket: String = "",
+    onTicketChange: ((String) -> Unit)? = null, // queue number for the CRM (web: #ticket-input)
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -97,7 +99,7 @@ fun RoomDetailSheet(
             }
         }
         if (onAskHelp != null) {
-            HelpAssistanceCard(helpStatus = helpStatus, language = language, onAskHelp = onAskHelp, modifier = Modifier.padding(top = 4.dp))
+            HelpAssistanceCard(helpStatus = helpStatus, language = language, onAskHelp = onAskHelp, ticket = ticket, onTicketChange = onTicketChange, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }

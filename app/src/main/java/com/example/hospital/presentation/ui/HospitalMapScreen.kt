@@ -282,6 +282,8 @@ fun HospitalMapScreen(
                     onNext = viewModel::onNextStep,
                     onExit = viewModel::onStopNavigation,
                     helpStatus = ui.helpStatus,
+                    ticket = ui.ticket,
+                    onTicketChange = viewModel::onTicketChange,
                     onAskHelp = viewModel::onAskHelp,
                     startLabel = ui.startRoom?.let { l.roomLabel(it, lang) }.orEmpty(),
                     destLabel = ui.destRoom?.let { l.roomLabel(it, lang) }.orEmpty(),
@@ -297,6 +299,8 @@ fun HospitalMapScreen(
                     onRouteTo = viewModel::onRouteToSelectedRoom,
                     onRouteFrom = viewModel::onRouteFromSelectedRoom,
                     helpStatus = ui.helpStatus,
+                    ticket = ui.ticket,
+                    onTicketChange = viewModel::onTicketChange,
                     onAskHelp = viewModel::onAskHelp.takeIf { ui.startRoom != null }
                 )
                 hasRoute -> RouteBottomSheet(
@@ -311,6 +315,8 @@ fun HospitalMapScreen(
                     onStepClick = viewModel::onFocusStep,
                     onStartNavigation = viewModel::onStartNavigation,
                     helpStatus = ui.helpStatus,
+                    ticket = ui.ticket,
+                    onTicketChange = viewModel::onTicketChange,
                     onAskHelp = viewModel::onAskHelp
                 )
                 else -> IdleSheet(
@@ -318,6 +324,8 @@ fun HospitalMapScreen(
                     language = lang,
                     onChangeStart = { viewModel.onOpenSearch(isStartRoom = true) },
                     helpStatus = ui.helpStatus,
+                    ticket = ui.ticket,
+                    onTicketChange = viewModel::onTicketChange,
                     onAskHelp = viewModel::onAskHelp
                 )
             }

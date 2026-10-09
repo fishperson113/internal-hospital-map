@@ -81,6 +81,7 @@ data class HospitalMapUiState(
 
     // CRM WebSocket live assistance ("Tôi bị lạc")
     val helpStatus: String? = null,
+    val ticket: String = "", // queue number the patient typed; the CRM shows "STT <ticket>"
 
     val language: AppLanguage = AppLanguage.VIETNAMESE
 )

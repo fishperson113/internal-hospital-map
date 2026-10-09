@@ -97,6 +97,8 @@ fun RouteBottomSheet(
     onStartNavigation: () -> Unit,
     helpStatus: String? = null,
     onAskHelp: (() -> Unit)? = null,
+    ticket: String = "",
+    onTicketChange: ((String) -> Unit)? = null, // queue number for the CRM (web: #ticket-input)
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -208,6 +210,8 @@ fun RouteBottomSheet(
                 helpStatus = helpStatus,
                 language = language,
                 onAskHelp = onAskHelp,
+                ticket = ticket,
+                onTicketChange = onTicketChange,
                 modifier = Modifier.padding(top = 4.dp)
             )
         }
@@ -222,6 +226,8 @@ fun IdleSheet(
     onChangeStart: () -> Unit,
     helpStatus: String?,
     onAskHelp: () -> Unit,
+    ticket: String = "",
+    onTicketChange: ((String) -> Unit)? = null, // queue number for the CRM (web: #ticket-input)
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -238,7 +244,7 @@ fun IdleSheet(
             fontSize = 13.sp, color = MapInkMuted, lineHeight = 18.sp
         )
         if (startRoom != null) {
-            HelpAssistanceCard(helpStatus = helpStatus, language = language, onAskHelp = onAskHelp, modifier = Modifier.padding(top = 4.dp))
+            HelpAssistanceCard(helpStatus = helpStatus, language = language, onAskHelp = onAskHelp, ticket = ticket, onTicketChange = onTicketChange, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }

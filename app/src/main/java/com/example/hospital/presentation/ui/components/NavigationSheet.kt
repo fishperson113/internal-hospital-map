@@ -102,6 +102,8 @@ fun NavigationSheet(
     onExit: () -> Unit,
     helpStatus: String? = null,
     onAskHelp: (() -> Unit)? = null,
+    ticket: String = "",
+    onTicketChange: ((String) -> Unit)? = null, // queue number for the CRM (web: #ticket-input)
     // Web navHtml: "Từ X Đổi · Đến Y Đổi" — changing a place re-routes and keeps directions on
     startLabel: String = "",
     destLabel: String = "",
@@ -238,6 +240,8 @@ fun NavigationSheet(
                 helpStatus = helpStatus,
                 language = language,
                 onAskHelp = onAskHelp,
+                ticket = ticket,
+                onTicketChange = onTicketChange,
                 modifier = Modifier.padding(top = 4.dp)
             )
         }

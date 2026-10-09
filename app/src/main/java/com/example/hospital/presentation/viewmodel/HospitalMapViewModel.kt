@@ -400,6 +400,7 @@ class HospitalMapViewModel(
             (if (s.navStepIndex == 1) transfer.roomA else transfer.roomB) else start
         return JSONObject()
             .put("type", "state")
+            .put("ticket", s.ticket)
             .put("from", room(start))
             .put("to", room(s.destRoom))
             .put("at", room(at)) // web liveState: the last landmark passed (start, then the shaft)
@@ -415,6 +416,11 @@ class HospitalMapViewModel(
     private fun goLive() {
         live = true
         liveJson(_uiState.value)?.let(liveClient::sendState)
+    }
+
+    /** Queue number field (web: #ticket-input): digits only, at most 6. Sent to the CRM with the state. */
+    fun onTicketChange(text: String) {
+        _uiState.update { it.copy(ticket = text.filter(Char::isDigit).take(6)) }
     }
 
     fun onAskHelp() {

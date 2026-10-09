@@ -1,6 +1,9 @@
 package com.example.hospital.presentation.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -12,7 +15,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hospital.presentation.util.AppLanguage
@@ -23,6 +29,8 @@ fun HelpAssistanceCard(
     helpStatus: String?,
     language: AppLanguage,
     onAskHelp: () -> Unit,
+    ticket: String = "",
+    onTicketChange: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -38,6 +46,33 @@ fun HelpAssistanceCard(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // Queue number (web: .ticket-row): the CRM shows "STT 25" instead of the random session id
+        if (onTicketChange != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(l.t(language, "Số thứ tự khám", "Queue number"), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                BasicTextField(
+                    value = ticket,
+                    onValueChange = onTicketChange,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    textStyle = TextStyle(fontSize = 14.sp, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurface),
+                    modifier = Modifier.width(96.dp).height(40.dp).testTag("ticket_input"),
+                    decorationBox = { field ->
+                        Box(
+                            Modifier.fillMaxSize().border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (ticket.isEmpty()) Text(l.t(language, "VD: 25", "e.g. 25"), fontSize = 14.sp, color = MaterialTheme.colorScheme.outline)
+                            field()
+                        }
+                    }
+                )
+            }
+        }
         if (statusText != null) {
             Surface(
                 shape = RoundedCornerShape(12.dp),

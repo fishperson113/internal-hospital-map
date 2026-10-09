@@ -170,6 +170,8 @@ or "Xem tất cả tầng" opens the 3D stack.
   room or a new route shows it again.
 - **"Tôi bị lạc"** in the route and navigation sheets shows only when the sheet is expanded
   (list button or tap the handle), or while a help request is active.
+- **Queue number** ("Số thứ tự khám") sits above "Tôi bị lạc": digits only, at most 6. It is sent as
+  `ticket` in the live state message and the CRM shows "STT <number>" instead of the random id.
 - **Search floor filter** (web C4b): chips "Tất cả tầng" + one per mapped floor (`short` from the
   server: B1, 1, 2…), combined with the query; at most 60 results; Enter picks the first one. New tags follow the same snake_case style.
 
