@@ -21,7 +21,8 @@ There's also a copy in `app/src/main/assets/building/`.
   `collectAsStateWithLifecycle`
 - Manual DI: `di/AppContainer` → `DefaultAppContainer` → `ViewModelFactory`
 - Coroutines. Routing runs on `Dispatchers.Default`
-- The map is drawn by hand with Compose `Canvas`. There is no map SDK and no WebView
+- The map is drawn with OpenGL ES 2.0 (`MapGl.kt`, a port of the web's `gl.js`) under a Compose
+  `Canvas` overlay for labels, pins and the dot. There is no map SDK and no WebView
 
 ## Package map
 
@@ -45,8 +46,9 @@ com.example
         └── ui/
             ├── HospitalMapScreen.kt        full-screen map + floating overlays (layout below)
             └── components/
-                ├── HospitalCanvasMap.kt    Canvas renderer, gestures, 3D↔2D camera animation
+                ├── HospitalCanvasMap.kt    GL view + Canvas overlay, gestures, 3D↔2D camera animation
                 ├── MapCamera.kt            MapCamera, MapProjector, fit/zoom/lerp math
+                ├── MapGl.kt                OpenGL renderer: room blocks, route ribbon with chevrons, beams; one draw call per floor
                 ├── FloorRail.kt            vertical floor picker (3D, 3, 2, 1)
                 ├── RouteSelectorCard.kt    From/To card + TransferPreferenceChips
                 ├── RouteBottomSheet.kt     ETA, step chips, expandable step list, start button
@@ -188,7 +190,7 @@ ignored and the dot stays at the start, like the web.
   step into the same tracker. North is learned from the compass when the mode is switched on.
 - The map button under "recenter" switches Baseline / RoNIN; the choice is kept.
 - **Directions camera** (web D29): during directions the 2D map follows the dot, zoomed 2.4x,
-  tilted 40°, turned so the route piece under the dot points up (by the route, never by the
+  tilted 52°, turned so the route piece under the dot points up (by the route, never by the
   compass, which shakes indoors), dot at 70% of the free height. A drag lets go; the recenter
   button turns blue ("Về giữa") and follows again. A pinch while following only changes zoom.
   The screen stays on during directions.

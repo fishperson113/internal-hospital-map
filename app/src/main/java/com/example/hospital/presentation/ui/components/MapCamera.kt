@@ -145,11 +145,11 @@ class MapProjector(
         return Offset(ox + cam.scale * rx, oy + cam.scale * (ry * ct - z * st))
     }
 
-    /** Screen → plan coordinates on the z = 0 plane (the selected floor). Null when edge-on. */
-    fun unproject(sx: Float, sy: Float): Offset? {
+    /** Screen → plan coordinates on the plane at height z (the selected floor is z = 0). Null when edge-on. */
+    fun unproject(sx: Float, sy: Float, z: Float = 0f): Offset? {
         if (ct < 0.05f) return null
         val vx = (sx - ox) / cam.scale
-        val ry = ((sy - oy) / cam.scale) / ct
+        val ry = ((sy - oy) / cam.scale + z * st) / ct
         val qx = vx * ca + ry * sa
         val qy = -vx * sa + ry * ca
         return Offset(qx + planW / 2f, qy + planH / 2f)

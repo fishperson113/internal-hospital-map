@@ -1,5 +1,6 @@
 package com.example.hospital.presentation.ui.components
 
+import android.opengl.GLSurfaceView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
@@ -17,7 +18,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Elevator
 import androidx.compose.material.icons.filled.Stairs
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,7 +38,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
@@ -55,6 +57,10 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.hospital.domain.model.Floor
 import com.example.hospital.domain.model.HospitalRoute
 import com.example.hospital.domain.model.Point2D
@@ -64,15 +70,10 @@ import com.example.hospital.presentation.util.AppLanguage
 import com.example.hospital.presentation.util.HospitalLocalization
 import com.example.ui.theme.MapAmber
 import com.example.ui.theme.MapBluePrimary
-import com.example.ui.theme.MapCanvasBackground
 import com.example.ui.theme.MapElevatorGreen
-import com.example.ui.theme.MapGreenSuccess
 import com.example.ui.theme.MapInk
 import com.example.ui.theme.MapInkMuted
-import com.example.ui.theme.MapInkSubtle
-import com.example.ui.theme.MapPlateStroke
 import com.example.ui.theme.MapRedAlert
-import com.example.ui.theme.MapSlabSide
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
@@ -255,6 +256,31 @@ fun HospitalCanvasMap(
 
     val is3dView = selectedFloorLevel == null
 
+    // OpenGL view: meshes built once per data load / route change, then only the camera moves
+    val renderer = remember { MapGlRenderer() }
+    var glView by remember { mutableStateOf<GLSurfaceView?>(null) }
+    val floorMeshes = remember(sortedFloors, planW, planH) { sortedFloors.associate { it.level to MapGlMesh.floorMesh(it, planW, planH) } }
+    val routeMeshes = remember(currentRoute) { MapGlMesh.routeMeshes(currentRoute) }
+    val roomIndex = remember(sortedFloors) { sortedFloors.flatMap { f -> f.rooms.mapIndexed { i, r -> r.id to i } }.toMap() }
+    SideEffect {
+        renderer.floorMeshes = floorMeshes
+        renderer.routeMeshes = routeMeshes
+        glView?.let {
+            // chevrons and beams move: every frame while a route is shown, otherwise only on change
+            it.renderMode = if (routeMeshes.isEmpty()) GLSurfaceView.RENDERMODE_WHEN_DIRTY else GLSurfaceView.RENDERMODE_CONTINUOUSLY
+            it.requestRender()
+        }
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, glView) {
+        val v = glView
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) v?.onResume() else if (e == Lifecycle.Event.ON_PAUSE) v?.onPause()
+        }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -301,8 +327,9 @@ fun HospitalCanvasMap(
                     } else {
                         val floor = sortedFloors.firstOrNull { it.level == selectedFloorLevel }
                         val world = pj.unproject(p.x, p.y)
-                        val room = if (floor != null && !floor.isTodo && world != null) {
-                            floor.rooms.lastOrNull { it.polygon.size >= 3 && pointInPolygon(world.x, world.y, it.polygon) }
+                        val top = pj.unproject(p.x, p.y, MapGlMesh.ROOM_H) // rooms are hit on top of their blocks
+                        val room = if (floor != null && !floor.isTodo && top != null) {
+                            floor.rooms.lastOrNull { it.polygon.size >= 3 && pointInPolygon(top.x, top.y, it.polygon) }
                         } else null
                         if (room != null) latestOnRoomClick(room) else latestOnEmptyTap(world?.let { Point2D(it.x, it.y) })
                     }
@@ -310,21 +337,45 @@ fun HospitalCanvasMap(
             }
             .testTag("hospital_map_canvas")
     ) {
+        // Floors, rooms and the route: OpenGL (MapGl.kt). Everything below is the overlay drawn on top.
+        AndroidView(
+            factory = { ctx ->
+                GLSurfaceView(ctx).apply {
+                    setEGLContextClientVersion(2)
+                    setEGLConfigChooser(msaaConfigChooser)
+                    preserveEGLContextOnPause = true
+                    setRenderer(renderer)
+                    renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+                    glView = this
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+        // Overlay: redrawn only when the camera or the data changes (the pulsing dot has its own layer below)
         Canvas(modifier = Modifier.fillMaxSize()) {
-            drawRect(MapCanvasBackground)
             val cam = camera ?: return@Canvas
+            fun hl(r: Room?, f: Floor) = if (r != null && r.floorLevel == f.level) roomIndex[r.id] ?: -9 else -9
+            val frame = MapGlRenderer.Frame(
+                cam, size.width, size.height, planW, planH, density, raise = 1.6f, xray = !is3dView,
+                floors = sortedFloors.map { f ->
+                    val v = floorVisuals[f.level]
+                    MapGlRenderer.FloorView(
+                        f.level, v?.z ?: 0f, v?.alpha ?: 0f, is3dView && f.level in routeLevels,
+                        hl(selectedRoom, f), hl(destRoom, f), hl(startRoom, f)
+                    )
+                }
+            )
+            if (frame != renderer.frame) {
+                renderer.frame = frame
+                glView?.requestRender()
+            }
             val pj = MapProjector(cam, planW, planH, size.width, size.height)
             val oa = overlayAlpha.value
 
-            for (floor in sortedFloors) {
-                val v = floorVisuals[floor.level] ?: continue
-                if (v.alpha < 0.01f) continue
-                drawFloor(
-                    floor = floor, vis = v, pj = pj, planW = planW, planH = planH,
-                    route = currentRoute, startRoom = startRoom, destRoom = destRoom, selectedRoom = selectedRoom,
-                    highlightPlate = is3dView && floor.level in routeLevels,
-                    showTodoText = is3dView && oa > 0f, textMeasurer = textMeasurer, language = language, textAlpha = oa
-                )
+            if (is3dView && oa > 0f) {
+                sortedFloors.filter { it.isTodo }.forEach { f ->
+                    floorVisuals[f.level]?.takeIf { it.alpha > 0.01f }?.let { drawTodoText(f, it, pj, planW, planH, textMeasurer, language, oa) }
+                }
             }
 
             if (oa > 0f) {
@@ -342,17 +393,6 @@ fun HospitalCanvasMap(
                         drawCircle(MapBluePrimary, 6.dp.toPx(), o, alpha = oa)
                     }
                 }
-                if (userPosition != null && userFloorLevel != null) {
-                    drawUserLocationWithHeading(
-                        position = userPosition,
-                        floorLevel = userFloorLevel,
-                        headingDegrees = userHeadingDegrees,
-                        floorVisuals = floorVisuals,
-                        pj = pj,
-                        alpha = oa,
-                        pulseProgress = pulseProgress
-                    )
-                }
                 if (is3dView) {
                     drawFloorTags(sortedFloors, floorVisuals, routeLevels, pj, planW, planH, textMeasurer, language, oa)
                 } else {
@@ -363,11 +403,27 @@ fun HospitalCanvasMap(
                 }
             }
         }
+        // The pulsing dot redraws every frame; on its own layer so labels are not redrawn with it
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val cam = camera ?: return@Canvas
+            val oa = overlayAlpha.value
+            if (oa > 0f && userPosition != null && userFloorLevel != null) {
+                drawUserLocationWithHeading(
+                    position = userPosition,
+                    floorLevel = userFloorLevel,
+                    headingDegrees = userHeadingDegrees,
+                    floorVisuals = floorVisuals,
+                    pj = MapProjector(cam, planW, planH, size.width, size.height),
+                    alpha = oa,
+                    pulseProgress = pulseProgress
+                )
+            }
+        }
     }
 }
 
 // Directions camera, same numbers as the web (FOLLOW in app.js)
-private const val FOLLOW_TILT = 40f    // degrees
+private const val FOLLOW_TILT = 52f    // degrees, enough to see the room blocks in 3D
 private const val FOLLOW_ZOOM = 2.4f   // x floor fit
 private const val FOLLOW_DOT_Y = 0.7f  // dot height in the free area (0 top, 1 bottom)
 private const val FOLLOW_MS = 300f     // smoothing time
@@ -389,87 +445,22 @@ private fun plateCorners(planW: Float, planH: Float): List<Point2D> {
     return listOf(Point2D(-p, -p), Point2D(planW + p, -p), Point2D(planW + p, planH + p), Point2D(-p, planH + p))
 }
 
-private fun polyPath(points: List<Point2D>, pj: MapProjector, z: Float): Path = Path().apply {
-    points.forEachIndexed { i, pt ->
-        val o = pj.project(pt.x, pt.y, z)
-        if (i == 0) moveTo(o.x, o.y) else lineTo(o.x, o.y)
-    }
-    close()
-}
-
-private fun DrawScope.drawFloor(
+/** "Floor N — no map yet" over a floor that has no data (the plate itself is drawn by GL). */
+private fun DrawScope.drawTodoText(
     floor: Floor,
     vis: FloorVisual,
     pj: MapProjector,
     planW: Float,
     planH: Float,
-    route: HospitalRoute?,
-    startRoom: Room?,
-    destRoom: Room?,
-    selectedRoom: Room?,
-    highlightPlate: Boolean,
-    showTodoText: Boolean,
     textMeasurer: TextMeasurer,
     language: AppLanguage,
     textAlpha: Float
 ) {
-    val a = vis.alpha
-    val z = vis.z
-    val corners = plateCorners(planW, planH)
-    val plate = polyPath(corners, pj, z)
-
-    if (floor.isTodo) {
-        drawPath(plate, Color.White.copy(alpha = 0.45f), alpha = a)
-        drawPath(
-            plate, MapInkSubtle, alpha = a,
-            style = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 7.dp.toPx())))
-        )
-        if (showTodoText) {
-            val c = pj.project(planW / 2f, planH / 2f, z)
-            val text = "${HospitalLocalization.getFloorLabel(floor.level, language)} — " +
-                HospitalLocalization.t(language, "chưa có sơ đồ", "no map yet")
-            val layout = textMeasurer.measure(text, TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MapInkMuted))
-            drawText(layout, topLeft = Offset(c.x - layout.size.width / 2f, c.y - layout.size.height / 2f), alpha = a * textAlpha)
-        }
-        return
-    }
-
-    // 3D slab thickness (only visible while tilted)
-    if (pj.cam.tiltDeg > 0.5f) drawPath(polyPath(corners, pj, z - MapCameraMath.SLAB_THICKNESS), MapSlabSide, alpha = a)
-    drawPath(plate, Color.White, alpha = a)
-    drawPath(
-        plate, if (highlightPlate) MapBluePrimary else MapPlateStroke, alpha = a,
-        style = Stroke(width = if (highlightPlate) 2.dp.toPx() else 1.dp.toPx())
-    )
-
-    val roomStroke = (2.5f * pj.cam.scale).coerceIn(0.5f, 3f)
-    val highlighted = ArrayList<Pair<Path, Color>>(3)
-    for (room in floor.rooms) {
-        if (room.polygon.size < 3) continue
-        val path = polyPath(room.polygon, pj, z)
-        drawPath(path, cachedColor(room.colorHex, Color(0xFFCFE0E8)), alpha = a)
-        val hc = when (room.id) {
-            selectedRoom?.id -> MapBluePrimary
-            destRoom?.id -> MapRedAlert
-            startRoom?.id -> MapGreenSuccess
-            else -> null
-        }
-        if (hc != null) highlighted += path to hc
-        else drawPath(path, Color.White, alpha = a, style = Stroke(width = roomStroke, join = StrokeJoin.Round))
-    }
-    highlighted.forEach { (path, color) ->
-        drawPath(path, color, alpha = a, style = Stroke(width = 3.dp.toPx(), join = StrokeJoin.Round))
-    }
-
-    route?.segments?.filter { it.floorLevel == floor.level && it.points.size >= 2 }?.forEach { seg ->
-        val path = Path()
-        seg.points.forEachIndexed { i, pt ->
-            val o = pj.project(pt.x, pt.y, z)
-            if (i == 0) path.moveTo(o.x, o.y) else path.lineTo(o.x, o.y)
-        }
-        drawPath(path, Color.White, alpha = a, style = Stroke(7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-        drawPath(path, MapBluePrimary, alpha = a, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-    }
+    val c = pj.project(planW / 2f, planH / 2f, vis.z)
+    val text = "${HospitalLocalization.getFloorLabel(floor.level, language)} — " +
+        HospitalLocalization.t(language, "chưa có sơ đồ", "no map yet")
+    val layout = textMeasurer.measure(text, TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MapInkMuted))
+    drawText(layout, topLeft = Offset(c.x - layout.size.width / 2f, c.y - layout.size.height / 2f), alpha = vis.alpha * textAlpha)
 }
 
 // -----------------------------------------------------------------------------
@@ -745,8 +736,9 @@ private fun DrawScope.drawRoomLabels(
     for (room in floor.rooms) {
         if (room.name.isBlank() || room.polygon.size < 3) continue
         val text = labelTexts[room.id] ?: continue
-        val box = projectedBox(room.boundsLeft, room.boundsTop, room.boundsLeft + room.boundsWidth, room.boundsTop + room.boundsHeight, pj)
-        val c = room.labelAt?.let { pj.project(it.x, it.y, 0f) } ?: Offset((box[0] + box[2]) / 2f, (box[1] + box[3]) / 2f)
+        // room labels sit on top of the GL room blocks
+        val box = projectedBox(room.boundsLeft, room.boundsTop, room.boundsLeft + room.boundsWidth, room.boundsTop + room.boundsHeight, pj, MapGlMesh.ROOM_H)
+        val c = room.labelAt?.let { pj.project(it.x, it.y, MapGlMesh.ROOM_H) } ?: Offset((box[0] + box[2]) / 2f, (box[1] + box[3]) / 2f)
         val bw = if (room.labelAt != null) 2f * min(c.x - box[0], box[2] - c.x) else box[2] - box[0]
         val bh = if (room.labelAt != null) 2f * min(c.y - box[1], box[3] - c.y) else box[3] - box[1]
         val style = TextStyle(
@@ -770,8 +762,8 @@ private fun DrawScope.drawRoomLabels(
     }
 }
 
-private fun projectedBox(x0: Float, y0: Float, x1: Float, y1: Float, pj: MapProjector): FloatArray {
-    val pts = listOf(pj.project(x0, y0, 0f), pj.project(x1, y0, 0f), pj.project(x1, y1, 0f), pj.project(x0, y1, 0f))
+private fun projectedBox(x0: Float, y0: Float, x1: Float, y1: Float, pj: MapProjector, z: Float = 0f): FloatArray {
+    val pts = listOf(pj.project(x0, y0, z), pj.project(x1, y0, z), pj.project(x1, y1, z), pj.project(x0, y1, z))
     return floatArrayOf(pts.minOf { it.x }, pts.minOf { it.y }, pts.maxOf { it.x }, pts.maxOf { it.y })
 }
 
