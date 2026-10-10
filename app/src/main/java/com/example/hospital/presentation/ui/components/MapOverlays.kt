@@ -106,21 +106,6 @@ fun SearchPill(
     }
 }
 
-/** Small translucent chip under the top cards: what the map is showing + a gesture hint. */
-@Composable
-fun ViewTitleChip(title: String, subtitle: String, modifier: Modifier = Modifier) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = Color.White.copy(alpha = 0.94f),
-        shadowElevation = 1.dp,
-        modifier = modifier.widthIn(max = 260.dp)
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-            Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = MapInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, fontSize = 11.sp, color = MapInkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
 
 /** Round 44dp floating button with an icon or a short text (e.g. "VI"); a longer text makes it a pill. */
 @Composable

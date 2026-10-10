@@ -53,7 +53,6 @@ import com.example.hospital.presentation.ui.components.RouteBottomSheet
 import com.example.hospital.presentation.ui.components.RouteSelectorCard
 import com.example.hospital.presentation.ui.components.SearchPill
 import com.example.hospital.presentation.ui.components.TransferPreferenceChips
-import com.example.hospital.presentation.ui.components.ViewTitleChip
 import com.example.hospital.presentation.util.AppLanguage
 import com.example.hospital.presentation.util.HospitalLocalization
 import com.example.hospital.presentation.viewmodel.HospitalMapViewModel
@@ -204,20 +203,9 @@ fun HospitalMapScreen(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.Top
             ) {
-                val (title, subtitle) = when {
-                    ui.selectedFloorLevel == null && ui.isNavigating -> l.t(lang, "Tất cả các tầng", "All floors") to
-                        (ui.currentRoute?.transfer?.let { l.t(lang, "Đổi tầng tại ", "Change floor at ") + l.roomLabel(it.roomA, lang) } ?: "")
-                    ui.selectedFloorLevel == null -> l.t(lang, "Tất cả các tầng", "All floors") to
-                        l.t(lang, "Chạm một tầng để mở · kéo để xoay", "Tap a floor to open · drag to rotate")
-                    currentFloor == null || currentFloor.isTodo -> l.getFloorLabel(ui.selectedFloorLevel ?: 0, lang) to
-                        l.t(lang, "Chưa có dữ liệu", "No data yet")
-                    else -> l.getFloorLabel(currentFloor.level, lang) to
-                        l.t(lang, "${currentFloor.rooms.size} phòng · chạm phòng để xem", "${currentFloor.rooms.size} rooms · tap a room")
-                }
-                ViewTitleChip(title = title, subtitle = subtitle, modifier = Modifier.weight(1f, fill = false))
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(10.dp),
