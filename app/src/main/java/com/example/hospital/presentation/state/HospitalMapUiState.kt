@@ -1,5 +1,6 @@
 package com.example.hospital.presentation.state
 
+import com.example.hospital.data.api.ChatMessage
 import com.example.hospital.domain.model.Floor
 import com.example.hospital.domain.model.Hospital
 import com.example.hospital.domain.model.HospitalRoute
@@ -82,6 +83,11 @@ data class HospitalMapUiState(
     // CRM WebSocket live assistance ("Tôi bị lạc")
     val helpStatus: String? = null,
     val ticket: String = "", // queue number the patient typed; the CRM shows "STT <ticket>"
+
+    // Assistant chat (web: assistant.js): fills the bottom sheet while open
+    val isChatOpen: Boolean = false,
+    val chatMessages: List<ChatMessage> = emptyList(),
+    val isChatBusy: Boolean = false,
 
     val language: AppLanguage = AppLanguage.VIETNAMESE
 )

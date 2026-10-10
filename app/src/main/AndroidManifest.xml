@@ -7,6 +7,16 @@
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Assistant chat (Android 11+ package visibility): the TTS engine reads replies aloud, the speech recognizer takes voice questions -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
     <application
         android:name=".MapApplication"
         android:allowBackup="true"

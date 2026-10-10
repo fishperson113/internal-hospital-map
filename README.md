@@ -55,6 +55,7 @@ com.example
                 ├── RoomDetailSheet.kt      sheet after tapping a room ("Đến đây" / "Đi từ đây")
                 ├── NavigationSheet.kt      NavigationBanner (top) + NavigationSheet (bottom)
                 ├── RoomSearchDialog.kt     full-screen search with accent-insensitive matching + quick chips
+                ├── ChatSheet.kt            assistant chat sheet: bubbles, typing reveal, route / help cards, mic + send
                 └── MapOverlays.kt          SearchPill, ViewTitleChip, MapFab, FloorEmptyCard, MapBottomSheetContainer
 ```
 
@@ -172,6 +173,13 @@ or "Xem tất cả tầng" opens the 3D stack.
   (list button or tap the handle), or while a help request is active.
 - **Queue number** ("Số thứ tự khám") sits above "Tôi bị lạc": digits only, at most 6. It is sent as
   `ticket` in the live state message and the CRM shows "STT <number>" instead of the random id.
+- **Assistant chat** (web `assistant.js`): blue assistant button above Baseline/RoNIN opens `ChatSheet` in the
+  bottom sheet. Type, tap a suggestion, or tap the mic (the phone's speech recognizer screen via `RecognizerIntent`,
+  no mic permission). `data/api/ChatClient.kt` sends the last 10 messages to `POST /api/chat` (backend `chat.js`,
+  Gemini); the reply's action runs on the map: a route to the room (3D stack when it changes floor, else the
+  destination floor) with a card (minutes, metres, floors, "Dẫn tôi đi"), or the "Tôi bị lạc" request with a live
+  status card. Replies are read aloud with the phone's TextToSpeech when the speaker is on; no voice for the
+  language = silent. The manifest `<queries>` makes the TTS engine and recognizer visible on Android 11+.
 - **Search floor filter** (web C4b): chips "Tất cả tầng" + one per mapped floor (`short` from the
   server: B1, 1, 2…), combined with the query; at most 60 results; Enter picks the first one. New tags follow the same snake_case style.
 

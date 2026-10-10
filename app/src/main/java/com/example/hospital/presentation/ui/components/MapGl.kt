@@ -369,8 +369,8 @@ class MapGlRenderer : GLSurfaceView.Renderer {
                 if (vInfo.x == -2.0 && uOnRoute > 0.5) c = vec4(uHlCol[0], 1.0);  // plate border on the route
                 if (vHl > 0.0) c.rgb = mix(c.rgb, vHl == 1.0 ? uHlCol[0] : vHl == 2.0 ? uHlCol[1] : uHlCol[2], 0.45);
               } else if (uMode == 1) {
-                // chevrons flowing toward the destination: a V across the ribbon, moving with time
-                float f = fract((vDist - abs(vInfo.y) * 7.0) / 26.0 - uTime * 1.4);
+                // chevrons flowing toward the destination: a V across the ribbon, tip pointing ahead, moving with time
+                float f = fract((vDist + abs(vInfo.y) * 7.0) / 26.0 - uTime * 1.4);
                 float chev = smoothstep(0.0, 0.08, f) * (1.0 - smoothstep(0.22, 0.30, f));
                 if (abs(vInfo.y) < 0.8) c.rgb = mix(c.rgb, vec3(1.0), chev * 0.85);
               } else {

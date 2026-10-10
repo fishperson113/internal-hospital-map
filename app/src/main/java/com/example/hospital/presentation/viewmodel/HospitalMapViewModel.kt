@@ -16,7 +16,12 @@ import com.example.hospital.presentation.state.HospitalMapUiState
 import com.example.hospital.presentation.state.TransferPreference
 import com.example.hospital.presentation.util.AppLanguage
 import com.example.hospital.presentation.util.HospitalLocalization
+import com.example.hospital.data.api.ChatAction
+import com.example.hospital.data.api.ChatClient
+import com.example.hospital.data.api.ChatMessage
 import com.example.hospital.data.api.RoninClient
+import android.speech.tts.TextToSpeech
+import java.util.Locale
 import com.example.hospital.sensor.HeadingFusion
 import com.example.hospital.sensor.HospitalSensorData
 import com.example.hospital.sensor.IndoorPdrState
@@ -105,6 +110,11 @@ class HospitalMapViewModel(
     private val liveClient = com.example.hospital.data.api.LiveClient(context = sensorManager?.context) { status ->
         _uiState.update { it.copy(helpStatus = status) }
     }
+
+    private val chatClient = ChatClient()
+    // Spoken assistant replies (free text, so the phone's TTS, not the recorded clips of VoicePlayer)
+    private var ttsReady = false
+    private val tts = sensorManager?.context?.let { ctx -> runCatching { TextToSpeech(ctx) { ttsReady = it == TextToSpeech.SUCCESS } }.getOrNull() }
 
     init {
         _uiState.update { it.copy(isRoninMode = roninOn, isVoiceOn = prefs?.getBoolean(KEY_VOICE, true) ?: true) }
@@ -705,6 +715,7 @@ class HospitalMapViewModel(
         sensorJob?.cancel()
         sensorManager?.stopTracking()
         liveClient.disconnect()
+        tts?.shutdown()
         roninClient.close()
         voice?.release()
     }
@@ -714,6 +725,7 @@ class HospitalMapViewModel(
         val s = _uiState.value
         when {
             s.isSearchActive -> onCloseSearch()
+            s.isChatOpen -> onCloseChat()
             s.isNavigating -> onStopNavigation()
             s.selectedRoom != null -> onDismissRoomDetails()
             s.isRouteDetailsExpanded -> onToggleRouteDetails()
@@ -721,6 +733,76 @@ class HospitalMapViewModel(
             else -> return false
         }
         return true
+    }
+
+    // ---------------------------------------------------------------- assistant chat (web: assistant.js)
+
+    fun onOpenChat() {
+        _uiState.update { it.copy(isChatOpen = true, selectedRoom = null, isRouteDetailsExpanded = false) }
+    }
+
+    fun onCloseChat() {
+        tts?.stop()
+        _uiState.update { it.copy(isChatOpen = false) }
+    }
+
+    /** Typed, spoken (speech-to-text result) or a suggestion chip. The reply's action runs on the map right away. */
+    fun onChatSend(text: String) {
+        val q = text.trim()
+        val s = _uiState.value
+        if (q.isEmpty() || s.isChatBusy) return
+        tts?.stop()
+        val history = s.chatMessages + ChatMessage("user", q)
+        _uiState.update { it.copy(chatMessages = history, isChatBusy = true) }
+        // a picked spot is sent as its nearest room (rawId), like the CRM state
+        val from = s.startRoom?.takeIf { it.rawId >= 0 }?.let { it.floorId to it.rawId }
+        val lang = if (s.language == AppLanguage.ENGLISH) "en" else "vi"
+        viewModelScope.launch {
+            val reply = chatClient.ask(history, from, lang)
+            _uiState.update { it.copy(chatMessages = it.chatMessages + reply, isChatBusy = false) }
+            if (_uiState.value.isVoiceOn) onChatSay(reply.text)
+            runChatAction(reply.action)
+        }
+    }
+
+    /** "Show route again" on an older answer. */
+    fun onChatRerun(index: Int) {
+        runChatAction(_uiState.value.chatMessages.getOrNull(index)?.action)
+    }
+
+    fun onChatSay(text: String) {
+        val t = tts ?: return
+        if (!ttsReady || text.isBlank()) return
+        val vi = _uiState.value.language == AppLanguage.VIETNAMESE
+        // no voice for the language: stay silent rather than read Vietnamese with an English voice
+        if (t.setLanguage(if (vi) Locale("vi", "VN") else Locale.US) < TextToSpeech.LANG_AVAILABLE) return
+        t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "chat")
+    }
+
+    /** "Dẫn tôi đi" on the route card: close the chat, start directions. */
+    fun onChatNavigate() {
+        _uiState.update { it.copy(isChatOpen = false) }
+        onStartNavigation()
+    }
+
+    private fun runChatAction(action: ChatAction?) {
+        when (action) {
+            null -> return
+            ChatAction.Help -> { if (_uiState.value.helpStatus.let { it == null || it == "done" }) onAskHelp() }
+            is ChatAction.Route -> {
+                val room = _uiState.value.floors.firstOrNull { it.floorId == action.floorId }?.rooms?.firstOrNull { it.rawId == action.rawId } ?: return
+                goLive()
+                if (_uiState.value.startRoom == null) defaultStart()?.takeIf { it.id != room.id }?.let(::setStart)
+                onSelectDestRoom(room)
+                // the map flies to the answer: the 3D stack when the route changes floor, else the destination floor
+                val job = routeJob
+                viewModelScope.launch {
+                    job?.join()
+                    val r = _uiState.value.currentRoute ?: return@launch
+                    if (_uiState.value.destRoom?.id == room.id) _uiState.update { it.copy(selectedFloorLevel = if (r.transfer != null) null else room.floorLevel) }
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- search

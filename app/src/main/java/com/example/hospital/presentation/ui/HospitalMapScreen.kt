@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Assistant
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -37,6 +38,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.hospital.presentation.ui.components.ChatSheet
 import com.example.hospital.presentation.ui.components.FloorEmptyCard
 import com.example.hospital.presentation.ui.components.FloorRail
 import com.example.hospital.presentation.ui.components.HospitalCanvasMap
@@ -110,7 +112,7 @@ fun HospitalMapScreen(
     val currentFloor = ui.floors.find { it.level == ui.selectedFloorLevel }
 
     BackHandler(
-        enabled = ui.isSearchActive || ui.isNavigating || ui.selectedRoom != null || ui.isRouteDetailsExpanded
+        enabled = ui.isSearchActive || ui.isChatOpen || ui.isNavigating || ui.selectedRoom != null || ui.isRouteDetailsExpanded
     ) { viewModel.onBack() }
 
     // Keep the screen on during directions (web: wake lock); released when directions end
@@ -240,6 +242,15 @@ fun HospitalMapScreen(
                         },
                         testTag = "btn_reset_view"
                     )
+                    // Assistant chat (web: assistant.js): ask the way by voice or text
+                    if (!ui.isNavigating) MapFab(
+                        contentDescription = l.t(lang, "Trợ lý hỏi đường", "Wayfinding assistant"),
+                        icon = Icons.Default.Assistant,
+                        tint = Color.White,
+                        containerColor = MapBluePrimary,
+                        onClick = viewModel::onOpenChat,
+                        testTag = "btn_open_chat"
+                    )
                     // Positioning mode (web: #mode-btn): RoNIN = blue with white text
                     MapFab(
                         contentDescription = l.t(lang, "Đổi cách định vị", "Switch positioning mode"),
@@ -268,6 +279,23 @@ fun HospitalMapScreen(
         ) {
             val selected = ui.selectedRoom
             when {
+                ui.isChatOpen -> ChatSheet(
+                    messages = ui.chatMessages,
+                    busy = ui.isChatBusy,
+                    language = lang,
+                    floors = ui.floors,
+                    startRoom = ui.startRoom,
+                    destRoom = ui.destRoom,
+                    route = ui.currentRoute,
+                    isRouteCalculating = ui.isRouteCalculating,
+                    helpStatus = ui.helpStatus,
+                    ticket = ui.ticket,
+                    onSend = viewModel::onChatSend,
+                    onClose = viewModel::onCloseChat,
+                    onNavigate = viewModel::onChatNavigate,
+                    onRerun = viewModel::onChatRerun,
+                    onSay = viewModel::onChatSay
+                )
                 ui.isNavigating -> NavigationSheet(
                     steps = ui.routeSteps,
                     stepIndex = ui.navStepIndex,
