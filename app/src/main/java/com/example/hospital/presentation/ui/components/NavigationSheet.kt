@@ -19,6 +19,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -111,6 +112,7 @@ fun NavigationSheet(
     onChangeDest: () -> Unit = {},
     voiceOn: Boolean = true,            // speaker button: voice guidance + vibration
     onToggleVoice: () -> Unit = {},
+    onOpenAr: (() -> Unit)? = null,     // camera button: arrow directions on the camera (ArOverlay)
     modifier: Modifier = Modifier
 ) {
     val l = HospitalLocalization
@@ -143,6 +145,17 @@ fun NavigationSheet(
                     contentDescription = if (voiceOn) l.t(language, "Tắt hướng dẫn bằng giọng nói", "Turn voice guidance off")
                     else l.t(language, "Bật hướng dẫn bằng giọng nói", "Turn voice guidance on"),
                     tint = if (voiceOn) MapBluePrimary else MapInkMuted
+                )
+            }
+            if (onOpenAr != null) OutlinedIconButton(
+                onClick = onOpenAr,
+                modifier = Modifier.padding(end = 8.dp).size(40.dp).testTag("btn_ar"),
+                border = BorderStroke(1.dp, MapDivider)
+            ) {
+                Icon(
+                    Icons.Default.PhotoCamera,
+                    contentDescription = l.t(language, "Chỉ đường bằng camera", "Camera directions"),
+                    tint = MapBluePrimary
                 )
             }
             TextButton(

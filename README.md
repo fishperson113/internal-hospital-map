@@ -180,6 +180,11 @@ or "Xem tất cả tầng" opens the 3D stack.
   destination floor) with a card (minutes, metres, floors, "Dẫn tôi đi"), or the "Tôi bị lạc" request with a live
   status card. Replies are read aloud with the phone's TextToSpeech when the speaker is on; no voice for the
   language = silent. The manifest `<queries>` makes the TTS engine and recognizer visible on Android 11+.
+- **Camera directions** (web `ar.js`, spec N6, D44): camera button next to the speaker during directions opens
+  `ArOverlay`: CameraX rear preview full screen and one arrow lying on the floor. Angle = `routeLine` (tracker
+  `lineHeading`) minus `userPlanHeading` (the map cone), so it is as good as the compass indoors (15 to 30 degrees).
+  No arrow at a shaft; camera denied = dark background, arrow still works. X, Back or exit directions closes it.
+  No ARCore. Tags `btn_ar`, `ar_overlay`, `btn_ar_close`.
 - **Search floor filter** (web C4b): chips "Tất cả tầng" + one per mapped floor (`short` from the
   server: B1, 1, 2…), combined with the query; at most 60 results; Enter picks the first one. New tags follow the same snake_case style.
 

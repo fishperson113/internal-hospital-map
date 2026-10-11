@@ -338,7 +338,8 @@ class HospitalMapViewModel(
                 userPosition = pdr.position, userFloorLevel = pdr.floorLevel,
                 hasArrivedAtDestination = pdr.hasArrived, isOffRoute = pdr.offRoute, isWalkingBack = pdr.backward,
                 // off the route or at a shaft there is no course: keep the last one
-                routeCourse = pdrTracker?.courseHeading() ?: it.routeCourse
+                routeCourse = pdrTracker?.courseHeading() ?: it.routeCourse,
+                pdrState = pdr, routeLine = pdrTracker?.lineHeading()
             )
         }
         if (_uiState.value.isNavigating) cues.onState(pdr, endCue(pdr.segmentIndex), SystemClock.elapsedRealtime())?.let(::say)

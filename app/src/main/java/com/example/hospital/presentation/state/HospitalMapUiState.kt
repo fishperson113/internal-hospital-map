@@ -79,6 +79,10 @@ data class HospitalMapUiState(
     val isWalkingBack: Boolean = false, // walking back the way the user came: the dot slides back along the route
     val isRoninMode: Boolean = false,   // positioning mode: false = Baseline (steps + gyro/compass), true = RoNIN (server)
     val isVoiceOn: Boolean = true,      // voice guidance + vibration during directions (speaker button)
+    // Camera arrow directions (web ar.js): the tracker state (next turn, metres left) and the route line
+    // direction under the dot; null off the route or at a shaft
+    val pdrState: com.example.hospital.sensor.IndoorPdrState? = null,
+    val routeLine: Float? = null,
 
     // CRM WebSocket live assistance ("Tôi bị lạc")
     val helpStatus: String? = null,

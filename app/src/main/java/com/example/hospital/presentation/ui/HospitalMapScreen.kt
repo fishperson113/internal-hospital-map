@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,6 +46,7 @@ import com.example.hospital.presentation.ui.components.HospitalCanvasMap
 import com.example.hospital.presentation.ui.components.IdleSheet
 import com.example.hospital.presentation.ui.components.MapFab
 import com.example.hospital.presentation.ui.components.MapViewportInsets
+import com.example.hospital.presentation.ui.components.ArOverlay
 import com.example.hospital.presentation.ui.components.NavigationBanner
 import com.example.hospital.presentation.ui.components.NavigationSheet
 import com.example.hospital.presentation.ui.components.RoomDetailSheet
@@ -113,6 +115,13 @@ fun HospitalMapScreen(
     BackHandler(
         enabled = ui.isSearchActive || ui.isChatOpen || ui.isNavigating || ui.selectedRoom != null || ui.isRouteDetailsExpanded
     ) { viewModel.onBack() }
+
+    // Camera arrow directions (web ar.js): closes with the X, Back, or when directions end
+    var arOpen by remember { mutableStateOf(false) }
+    var arCamera by remember { mutableStateOf(false) }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { arCamera = it }
+    LaunchedEffect(ui.isNavigating) { if (!ui.isNavigating) arOpen = false }
+    BackHandler(enabled = arOpen) { arOpen = false }
 
     // Keep the screen on during directions (web: wake lock); released when directions end
     val view = LocalView.current
@@ -306,7 +315,8 @@ fun HospitalMapScreen(
                     onChangeStart = { viewModel.onOpenSearch(isStartRoom = true) },
                     onChangeDest = { viewModel.onOpenSearch(isStartRoom = false) },
                     voiceOn = ui.isVoiceOn,
-                    onToggleVoice = viewModel::onToggleVoice
+                    onToggleVoice = viewModel::onToggleVoice,
+                    onOpenAr = { arOpen = true; cameraLauncher.launch(Manifest.permission.CAMERA) }
                 )
                 selected != null -> RoomDetailSheet(
                     room = selected,
@@ -363,5 +373,16 @@ fun HospitalMapScreen(
                 onDismiss = viewModel::onCloseSearch
             )
         }
+
+        if (arOpen) ArOverlay(
+            step = ui.routeSteps.getOrNull(ui.navStepIndex),
+            pdr = ui.pdrState,
+            routeLine = ui.routeLine,
+            facing = ui.userPlanHeading,
+            offRoute = ui.isOffRoute,
+            hasCamera = arCamera,
+            language = lang,
+            onClose = { arOpen = false }
+        )
     }
 }
