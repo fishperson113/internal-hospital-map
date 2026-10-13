@@ -346,6 +346,7 @@ private fun PhotoThumb(p: SlipPhoto, size: androidx.compose.ui.unit.Dp) {
  * arrives; tapping the line opens it again. Like the "thinking" line of chat apps.
  */
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun ThinkSteps(m: ChatMessage, language: AppLanguage) {
     fun t(vi: String, en: String) = HospitalLocalization.t(language, vi, en)
     var toggled by remember(m.atMs) { mutableStateOf<Boolean?>(null) }
@@ -388,6 +389,7 @@ private fun ThinkSteps(m: ChatMessage, language: AppLanguage) {
 
 /** Where the answer comes from (web: sourcesHtml): a notice board on the hospital wall, or web pages (tap opens). */
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun Sources(sources: List<ChatSource>, language: AppLanguage) {
     val uri = LocalUriHandler.current
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
