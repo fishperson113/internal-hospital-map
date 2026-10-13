@@ -291,7 +291,11 @@ fun HospitalMapScreen(
                     onClose = viewModel::onCloseChat,
                     onNavigate = viewModel::onChatNavigate,
                     onRerun = viewModel::onChatRerun,
-                    onSay = viewModel::onChatSay
+                    onSay = viewModel::onChatSay,
+                    photos = ui.chatPhotos,
+                    onAddPhotos = viewModel::onChatAddPhotos,
+                    onRemovePhoto = viewModel::onChatRemovePhoto,
+                    onNextStop = viewModel::onChatNextStop
                 )
                 ui.isNavigating -> NavigationSheet(
                     steps = ui.routeSteps,

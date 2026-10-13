@@ -55,7 +55,7 @@ com.example
                 ├── RoomDetailSheet.kt      sheet after tapping a room ("Đến đây" / "Đi từ đây")
                 ├── NavigationSheet.kt      NavigationBanner (top) + NavigationSheet (bottom)
                 ├── RoomSearchDialog.kt     full-screen search with accent-insensitive matching + quick chips
-                ├── ChatSheet.kt            assistant chat sheet: bubbles, typing reveal, route / help cards, mic + send
+                ├── ChatSheet.kt            assistant chat sheet: bubbles, working steps, sources, route / help / plan cards, photos, mic + send
                 └── MapOverlays.kt          SearchPill, ViewTitleChip, MapFab, FloorEmptyCard, MapBottomSheetContainer
 ```
 
@@ -176,10 +176,17 @@ or "Xem tất cả tầng" opens the 3D stack.
 - **Assistant chat** (web `assistant.js`): blue assistant button above Baseline/RoNIN opens `ChatSheet` in the
   bottom sheet. Type, tap a suggestion, or tap the mic (the phone's speech recognizer screen via `RecognizerIntent`,
   no mic permission). `data/api/ChatClient.kt` sends the last 10 messages to `POST /api/chat` (backend `chat.js`,
-  Gemini); the reply's action runs on the map: a route to the room (3D stack when it changes floor, else the
-  destination floor) with a card (minutes, metres, floors, "Dẫn tôi đi"), or the "Tôi bị lạc" request with a live
-  status card. Replies are read aloud with the phone's TextToSpeech when the speaker is on; no voice for the
-  language = silent. The manifest `<queries>` makes the TTS engine and recognizer visible on Android 11+.
+  OpenAI) with `stream: true`: the server's working steps (understanding, notice boards, web searches) show above
+  the answer and fold into one line when it arrives; sources (notice board or web domain) show under it. The
+  reply's action runs on the map: a route to the room (3D stack when it changes floor, else the destination
+  floor) with a card (minutes, metres, floors, "Dẫn tôi đi"), the "Tôi bị lạc" request with a live status card,
+  or a visit plan. Replies are read aloud with the server's voice (`POST /api/tts`, mp3, kept for "read again");
+  the phone's TextToSpeech only when the server fails (no voice for the language = silent). The manifest
+  `<queries>` makes the TTS engine, recognizer and camera app visible on Android 11+.
+- **Slip photos** (web D47): the camera button in the chat takes a photo (camera app via `FileProvider`) or picks
+  up to 4 from the gallery; `presentation/util/SlipPhotoLoader.kt` shrinks them to 1600 px JPEG and they go as
+  `images` with the next message. The plan card lists the stops in order with simulated queues ("Hàng chờ giả
+  lập"); the map routes to the current stop and "Sang điểm tiếp theo" starts the next route from it.
 - **Camera directions** (web `ar.js`, spec N6, D44): camera button next to the speaker during directions opens
   `ArOverlay`: CameraX rear preview full screen and one arrow lying on the floor. Angle = `routeLine` (tracker
   `lineHeading`) minus `userPlanHeading` (the map cone), so it is as good as the compass indoors (15 to 30 degrees).

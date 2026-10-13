@@ -92,6 +92,7 @@ data class HospitalMapUiState(
     val isChatOpen: Boolean = false,
     val chatMessages: List<ChatMessage> = emptyList(),
     val isChatBusy: Boolean = false,
+    val chatPhotos: List<com.example.hospital.data.api.SlipPhoto> = emptyList(), // slip photos waiting to be sent
 
     val language: AppLanguage = AppLanguage.VIETNAMESE
 )

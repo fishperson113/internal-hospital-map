@@ -19,6 +19,7 @@ import com.example.hospital.presentation.util.HospitalLocalization
 import com.example.hospital.data.api.ChatAction
 import com.example.hospital.data.api.ChatClient
 import com.example.hospital.data.api.ChatMessage
+import com.example.hospital.data.api.SlipPhoto
 import com.example.hospital.data.api.RoninClient
 import android.speech.tts.TextToSpeech
 import java.util.Locale
@@ -115,6 +116,9 @@ class HospitalMapViewModel(
     // Spoken assistant replies (free text, so the phone's TTS, not the recorded clips of VoicePlayer)
     private var ttsReady = false
     private val tts = sensorManager?.context?.let { ctx -> runCatching { TextToSpeech(ctx) { ttsReady = it == TextToSpeech.SUCCESS } }.getOrNull() }
+    private var player: android.media.MediaPlayer? = null // the server voice (POST /api/tts)
+    private val sayCache = HashMap<String, ByteArray>() // "lang|text" -> mp3, so "read again" needs no new request
+    private var sayId = 0 // bumped by every new reply or stop: an older reply that loads late stays silent
 
     init {
         _uiState.update { it.copy(isRoninMode = roninOn, isVoiceOn = prefs?.getBoolean(KEY_VOICE, true) ?: true) }
@@ -322,6 +326,7 @@ class HospitalMapViewModel(
         private const val KEY_VOICE = "voice_on"
         private const val MODE_BASELINE = "baseline"
         // web app.js DEFAULT_FROM / DEFAULT_TO
+        private const val MAX_CHAT_PHOTOS = 4
         private const val DEFAULT_FROM_FLOOR = "tang-2"
         private const val DEFAULT_FROM_ID = 40
         private const val DEFAULT_TO_FLOOR = "tang-3"
@@ -717,6 +722,7 @@ class HospitalMapViewModel(
         sensorManager?.stopTracking()
         liveClient.disconnect()
         tts?.shutdown()
+        player?.release()
         roninClient.close()
         voice?.release()
     }
@@ -743,55 +749,133 @@ class HospitalMapViewModel(
     }
 
     fun onCloseChat() {
-        tts?.stop()
+        chatHush()
         _uiState.update { it.copy(isChatOpen = false) }
     }
 
-    /** Typed, spoken (speech-to-text result) or a suggestion chip. The reply's action runs on the map right away. */
+    /** Slip photos picked or taken in the chat: they go with the next message (at most 4, like the web). */
+    fun onChatAddPhotos(photos: List<SlipPhoto>) {
+        _uiState.update { it.copy(chatPhotos = (it.chatPhotos + photos).take(MAX_CHAT_PHOTOS)) }
+    }
+
+    fun onChatRemovePhoto(index: Int) {
+        _uiState.update { it.copy(chatPhotos = it.chatPhotos.filterIndexed { i, _ -> i != index }) }
+    }
+
+    /**
+     * Typed, spoken (speech-to-text result) or a suggestion chip, plus the waiting slip photos.
+     * The answer bubble shows the server's working steps until the answer arrives; its action then runs on the map.
+     */
     fun onChatSend(text: String) {
-        val q = text.trim()
         val s = _uiState.value
-        if (q.isEmpty() || s.isChatBusy) return
-        tts?.stop()
-        val history = s.chatMessages + ChatMessage("user", q)
-        _uiState.update { it.copy(chatMessages = history, isChatBusy = true) }
+        val photos = s.chatPhotos
+        if ((text.isBlank() && photos.isEmpty()) || s.isChatBusy) return
+        val vi = s.language == AppLanguage.VIETNAMESE
+        val q = text.trim().ifEmpty { if (vi) "Mình nên đi đâu trước?" else "Where should I go first?" }
+        chatHush()
+        val history = s.chatMessages + ChatMessage("user", q, photos = photos)
+        _uiState.update { it.copy(chatMessages = history + ChatMessage("model", "", pending = true), chatPhotos = emptyList(), isChatBusy = true) }
         // a picked spot is sent as its nearest room (rawId), like the CRM state
         val from = s.startRoom?.takeIf { it.rawId >= 0 }?.let { it.floorId to it.rawId }
-        val lang = if (s.language == AppLanguage.ENGLISH) "en" else "vi"
+        val lang = if (vi) "vi" else "en"
+        // the answer bubble is the last message while it is pending (the chat takes one question at a time)
+        fun updatePending(f: (ChatMessage) -> ChatMessage) = _uiState.update { st ->
+            val last = st.chatMessages.lastOrNull()
+            if (last == null || !last.pending) st else st.copy(chatMessages = st.chatMessages.dropLast(1) + f(last))
+        }
         viewModelScope.launch {
-            val reply = chatClient.ask(history, from, lang)
-            _uiState.update { it.copy(chatMessages = it.chatMessages + reply, isChatBusy = false) }
+            val reply = chatClient.ask(history, from, lang, photos.map { it.dataUrl }) { step ->
+                // same id: the running step is replaced by its done state
+                updatePending { m -> m.copy(steps = if (m.steps.any { it.id == step.id }) m.steps.map { if (it.id == step.id) step else it } else m.steps + step) }
+            }
+            updatePending { m -> reply.copy(steps = m.steps, atMs = System.currentTimeMillis()) }
+            _uiState.update { it.copy(isChatBusy = false) }
             if (_uiState.value.isVoiceOn) onChatSay(reply.text)
             runChatAction(reply.action)
         }
     }
 
-    /** "Show route again" on an older answer. */
+    /** "Show route again" on an older answer (a plan: the route to its current stop). */
     fun onChatRerun(index: Int) {
         runChatAction(_uiState.value.chatMessages.getOrNull(index)?.action)
     }
 
+    /** "Next stop" on a plan card: the user is at the current stop now, so the route starts there. */
+    fun onChatNextStop(index: Int) {
+        val plan = _uiState.value.chatMessages.getOrNull(index)?.action as? ChatAction.Plan ?: return
+        plan.stops[plan.cur].let { roomAt(it.floorId, it.rawId) }?.let(::setStart)
+        val next = plan.copy(cur = minOf(plan.cur + 1, plan.stops.lastIndex))
+        _uiState.update { st -> st.copy(chatMessages = st.chatMessages.mapIndexed { i, x -> if (i == index) x.copy(action = next) else x }) }
+        runChatAction(next)
+    }
+
+    /**
+     * Reads a reply aloud with the server's female voice (POST /api/tts, web: chatSay). The audio is kept, so
+     * "read again" plays at once. The phone's TTS only when the server cannot answer.
+     */
     fun onChatSay(text: String) {
+        if (text.isBlank()) return
+        chatHush()
+        val id = sayId
+        val lang = if (_uiState.value.language == AppLanguage.ENGLISH) "en" else "vi"
+        viewModelScope.launch {
+            val key = "$lang|$text"
+            val mp3 = sayCache[key] ?: chatClient.speech(text, lang)?.also { sayCache[key] = it }
+            if (id != sayId) return@launch // a newer reply or a stop came first
+            if (mp3 == null || !playMp3(mp3)) phoneSay(text, lang == "vi")
+        }
+    }
+
+    private fun playMp3(bytes: ByteArray): Boolean = runCatching {
+        player?.release()
+        player = android.media.MediaPlayer().apply {
+            setDataSource(object : android.media.MediaDataSource() {
+                override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+                    if (position >= bytes.size) return -1
+                    val n = minOf(size, bytes.size - position.toInt())
+                    System.arraycopy(bytes, position.toInt(), buffer, offset, n)
+                    return n
+                }
+                override fun getSize() = bytes.size.toLong()
+                override fun close() {}
+            })
+            setOnPreparedListener { it.start() }
+            prepareAsync()
+        }
+    }.isSuccess
+
+    private fun phoneSay(text: String, vi: Boolean) {
         val t = tts ?: return
-        if (!ttsReady || text.isBlank()) return
-        val vi = _uiState.value.language == AppLanguage.VIETNAMESE
+        if (!ttsReady) return
         // no voice for the language: stay silent rather than read Vietnamese with an English voice
         if (t.setLanguage(if (vi) Locale("vi", "VN") else Locale.US) < TextToSpeech.LANG_AVAILABLE) return
         t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "chat")
     }
 
-    /** "Dẫn tôi đi" on the route card: close the chat, start directions. */
+    private fun chatHush() {
+        sayId++
+        player?.release()
+        player = null
+        tts?.stop()
+    }
+
+    /** "Dẫn tôi đi" on the route or plan card: close the chat, start directions. */
     fun onChatNavigate() {
+        chatHush()
         _uiState.update { it.copy(isChatOpen = false) }
         onStartNavigation()
     }
+
+    private fun roomAt(floorId: String, rawId: Int): Room? =
+        _uiState.value.floors.firstOrNull { it.floorId == floorId }?.rooms?.firstOrNull { it.rawId == rawId }
 
     private fun runChatAction(action: ChatAction?) {
         when (action) {
             null -> return
             ChatAction.Help -> { if (_uiState.value.helpStatus.let { it == null || it == "done" }) onAskHelp() }
+            is ChatAction.Plan -> action.stops[action.cur].let { runChatAction(ChatAction.Route(it.floorId, it.rawId)) }
             is ChatAction.Route -> {
-                val room = _uiState.value.floors.firstOrNull { it.floorId == action.floorId }?.rooms?.firstOrNull { it.rawId == action.rawId } ?: return
+                val room = roomAt(action.floorId, action.rawId) ?: return
                 goLive()
                 if (_uiState.value.startRoom == null) defaultStart()?.takeIf { it.id != room.id }?.let(::setStart)
                 onSelectDestRoom(room)
